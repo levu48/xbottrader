@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: node typecheck + test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: typecheck
+        run: pnpm -r typecheck
+      - name: test
+        run: pnpm -r test
+
+  python:
+    name: python test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/bot-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install uv
+        run: pip install uv
+      - name: install deps
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -r pyproject.toml
+          uv pip install --python .venv/bin/python pytest pytest-asyncio fastapi httpx
+      - name: install gateway deps (for cross-language interop test)
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm install -g pnpm@9.15.2
+          pnpm install --no-frozen-lockfile
+      - name: pytest
+        run: .venv/bin/python -m pytest tests/ -q
+
+  docker-build:
+    name: docker images build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          push: false
+          tags: xbt-gateway:ci
+      - name: build bot-engine image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/bot-engine/Dockerfile
+          push: false
+          tags: xbt-bot-engine:ci

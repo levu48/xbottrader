@@ -1,0 +1,42 @@
+# docker-compose stack that runs on the Bot Engine Droplet.
+# - bot-engine: the FastAPI control plane (port 5001)
+# - redis:     local Redis for event streams. Once we add DO Managed Caching,
+#              point REDIS_URL at it and drop this service.
+#
+# Secrets come from /etc/xbt/bot-engine.env on the host (not in git).
+# See infra/README.md.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - xbt
+    # Not exposed on the host — only reachable from inside this compose network.
+
+  bot-engine:
+    build:
+      context: /opt/xbt/xbottrader
+      dockerfile: apps/bot-engine/Dockerfile
+    image: xbt/bot-engine:local
+    restart: unless-stopped
+    depends_on:
+      - redis
+    env_file:
+      - /etc/xbt/bot-engine.env
+    environment:
+      REDIS_URL: redis://redis:6379
+      XBT_LAUNCHER: demo
+    ports:
+      - "5001:5001"
+    networks:
+      - xbt
+
+volumes:
+  redis-data:
+
+networks:
+  xbt:

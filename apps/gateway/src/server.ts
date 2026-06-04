@@ -3,6 +3,9 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { hostname } from 'node:os';
 
+import { BotEngineClient } from './clients/bot.js';
+import { InternalAuthSigner } from './clients/internal-auth.js';
+import { registerBotsRoutes } from './routes/bots.js';
 import { EventStreamConsumer } from './ws/consumer.js';
 import { IoredisStreamReader } from './ws/redis-reader.js';
 import { ConnectionRegistry } from './ws/registry.js';
@@ -23,6 +26,11 @@ async function main(): Promise<void> {
   await app.register(fastifyWebsocket);
 
   const registry = new ConnectionRegistry();
+
+  const botEngineUrl = process.env.BOT_ENGINE_URL ?? 'http://localhost:5001';
+  const signer = InternalAuthSigner.fromEnv();
+  const botClient = new BotEngineClient(botEngineUrl, signer);
+  await registerBotsRoutes(app, { bot: botClient });
 
   app.get('/healthz', async () => ({ ok: true }));
 

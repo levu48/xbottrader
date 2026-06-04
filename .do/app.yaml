@@ -1,0 +1,79 @@
+# DigitalOcean App Platform spec for xbottrader.
+#
+# Deploy with:
+#     doctl apps create --spec .do/app.yaml
+# Update:
+#     doctl apps update <APP_ID> --spec .do/app.yaml
+#
+# Scope: Gateway (Node) + Web (Next.js). The Bot Engine runs on a Droplet
+# (see infra/do/) because App Platform's rotating egress IPs break exchange
+# API key allowlisting — see project-xbottrader-hosting memory.
+#
+# Replace these placeholders before first deploy:
+#   github.repo            → "your-user/xbottrader"
+#   github.branch          → "main"
+#   region                 → your preferred region (nyc, sfo, fra, …)
+#   ${SECRETS}             → set via `doctl apps update --secret KEY=VAL`
+#                             OR the App Platform UI (encrypted at rest)
+
+name: xbottrader
+region: nyc
+
+services:
+  - name: gateway
+    instance_size_slug: basic-xs
+    instance_count: 1
+    http_port: 4000
+    dockerfile_path: apps/gateway/Dockerfile
+    source_dir: /
+    github:
+      repo: REPLACE_ME/xbottrader
+      branch: main
+      deploy_on_push: true
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 20
+      period_seconds: 15
+      timeout_seconds: 5
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      - key: GATEWAY_PORT
+        scope: RUN_TIME
+        value: "4000"
+      - key: REDIS_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${REDIS_URL}
+      - key: GATEWAY_INTERNAL_HMAC_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${GATEWAY_INTERNAL_HMAC_SECRET}
+      - key: BOT_ENGINE_URL
+        scope: RUN_TIME
+        value: ${BOT_ENGINE_URL}      # http://<droplet-reserved-ip>:5001
+      - key: XBT_KEK
+        scope: RUN_TIME
+        type: SECRET
+        value: ${XBT_KEK}
+
+  - name: web
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    http_port: 3000
+    source_dir: apps/web
+    build_command: pnpm install --no-frozen-lockfile && pnpm build
+    run_command: pnpm start
+    github:
+      repo: REPLACE_ME/xbottrader
+      branch: main
+      deploy_on_push: true
+    envs:
+      - key: NEXT_PUBLIC_GATEWAY_WS
+        scope: BUILD_TIME
+        value: ${GATEWAY_WS_URL}      # wss://gateway-xxxx.ondigitalocean.app/ws
+      - key: NEXT_PUBLIC_GATEWAY_HTTP
+        scope: BUILD_TIME
+        value: ${GATEWAY_HTTP_URL}    # https://gateway-xxxx.ondigitalocean.app
