@@ -247,3 +247,81 @@ def test_get_endpoint_isolates_users() -> None:
         # u2 should not see u1's bot
         resp = client.get("/bots/b9", headers=_signed("GET", "/bots/b9", "u2", b""))
         assert resp.status_code == 404
+
+
+def _start_body() -> bytes:
+    return json.dumps(
+        {
+            "strategy": {
+                "strategy_type": "dca",
+                "symbol": "BTC/USDT",
+                "quote_amount": "100",
+                "interval_minutes": 1,
+            }
+        }
+    ).encode()
+
+
+def test_kill_endpoint_returns_404_for_unknown_bot() -> None:
+    client, _, _ = _client()
+    resp = client.post(
+        "/bots/ghost/kill",
+        content=b"",
+        headers=_signed("POST", "/bots/ghost/kill", "u1", b""),
+    )
+    assert resp.status_code == 404
+
+
+def test_kill_endpoint_kills_a_started_bot() -> None:
+    client, redis, _ = _client()
+    body = _start_body()
+    with client:
+        client.post(
+            "/bots/k1/start",
+            content=body,
+            headers={**_signed("POST", "/bots/k1/start", "u1", body), "content-type": "application/json"},
+        )
+        resp = client.post(
+            "/bots/k1/kill",
+            content=b"",
+            headers=_signed("POST", "/bots/k1/kill", "u1", b""),
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "killed"
+    assert "bot_killed" in [f["event_type"] for _, f in redis.entries]
+
+
+def test_kill_endpoint_isolates_users() -> None:
+    client, _, _ = _client()
+    body = _start_body()
+    with client:
+        client.post(
+            "/bots/k2/start",
+            content=body,
+            headers={**_signed("POST", "/bots/k2/start", "u1", body), "content-type": "application/json"},
+        )
+        # u2 cannot kill u1's bot
+        resp = client.post(
+            "/bots/k2/kill",
+            content=b"",
+            headers=_signed("POST", "/bots/k2/kill", "u2", b""),
+        )
+        assert resp.status_code == 404
+
+
+def test_kill_all_endpoint_scopes_to_caller() -> None:
+    client, _, _ = _client()
+    body = _start_body()
+    with client:
+        client.post(
+            "/bots/ka/start",
+            content=body,
+            headers={**_signed("POST", "/bots/ka/start", "u1", body), "content-type": "application/json"},
+        )
+        resp = client.post(
+            "/bots/kill-all",
+            content=b"",
+            headers=_signed("POST", "/bots/kill-all", "u1", b""),
+        )
+    assert resp.status_code == 200, resp.text
+    assert isinstance(resp.json()["killed"], list)

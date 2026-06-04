@@ -97,6 +97,18 @@ class OrderRepo:
         await session.flush()
         return row
 
+    @staticmethod
+    async def set_status_by_exchange_id(
+        session: AsyncSession, *, exchange_order_id: str, status: str
+    ) -> None:
+        row = (
+            await session.execute(
+                select(OrderRow).where(OrderRow.exchange_order_id == exchange_order_id)
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            row.status = status
+
 
 class FillRepo:
     @staticmethod

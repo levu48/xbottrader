@@ -2,9 +2,17 @@ import { StrategyConfig } from '@xbt/shared';
 import { z } from 'zod';
 import { InternalAuthSigner } from './internal-auth.js';
 
+export const RiskLimits = z.object({
+  // Absolute loss cap in the strategy's quote currency. String to preserve
+  // decimal precision over JSON, mirroring quote_amount in StrategyConfig.
+  max_loss_quote: z.string().nullable().optional(),
+});
+export type RiskLimits = z.infer<typeof RiskLimits>;
+
 export const StartBotRequest = z.object({
   strategy: StrategyConfig,
   mode: z.enum(['paper', 'live']).default('paper'),
+  risk: RiskLimits.optional(),
 });
 export type StartBotRequest = z.infer<typeof StartBotRequest>;
 
@@ -14,6 +22,11 @@ export const BotStateResponse = z.object({
   last_error: z.string().nullable().optional(),
 });
 export type BotStateResponse = z.infer<typeof BotStateResponse>;
+
+export const KillAllResponse = z.object({
+  killed: z.array(z.string()),
+});
+export type KillAllResponse = z.infer<typeof KillAllResponse>;
 
 export class BotEngineError extends Error {
   constructor(
@@ -48,6 +61,17 @@ export class BotEngineClient {
     return this.#post(`/bots/${args.botId}/stop`, args.userId, undefined);
   }
 
+  /** Force-stop a single bot (cancels its open orders). */
+  async killBot(args: { userId: string; botId: string }): Promise<BotStateResponse> {
+    return this.#post(`/bots/${args.botId}/kill`, args.userId, undefined);
+  }
+
+  /** Global kill switch — force-stop all of the caller's running bots. */
+  async killAll(args: { userId: string }): Promise<KillAllResponse> {
+    const text = await this.#send('POST', '/bots/kill-all', args.userId, '');
+    return KillAllResponse.parse(JSON.parse(text));
+  }
+
   async getBot(args: { userId: string; botId: string }): Promise<BotStateResponse> {
     return this.#request('GET', `/bots/${args.botId}`, args.userId, '');
   }
@@ -63,6 +87,11 @@ export class BotEngineClient {
     userId: string,
     body: string,
   ): Promise<BotStateResponse> {
+    const text = await this.#send(method, path, userId, body);
+    return BotStateResponse.parse(JSON.parse(text));
+  }
+
+  async #send(method: string, path: string, userId: string, body: string): Promise<string> {
     const headers = this.signer.sign({ method, path, userId, body });
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
@@ -73,7 +102,7 @@ export class BotEngineClient {
     if (res.status >= 400) {
       throw new BotEngineError(res.status, text);
     }
-    return BotStateResponse.parse(JSON.parse(text));
+    return text;
   }
 }
 

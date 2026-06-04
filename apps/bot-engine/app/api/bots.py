@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from ..runtime.supervisor import BotState, Supervisor
 from .auth import InternalAuthenticator, InternalAuthError, InternalIdentity
 from .launcher import BotLauncher
-from .schemas import BotStateResponse, StartBotRequest
+from .schemas import BotStateResponse, KillAllResponse, StartBotRequest
 
 router = APIRouter(prefix="/bots", tags=["bots"])
 
@@ -44,12 +44,41 @@ async def start_bot(
             strategy=plan.strategy,
             bars=plan.bars,
             router=plan.router,
+            max_loss_quote=body.risk.max_loss_quote,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
 
     state = supervisor.get_state(bot_id) or BotState.STARTING
     return BotStateResponse(bot_id=bot_id, state=state.value)
+
+
+@router.post("/kill-all", response_model=KillAllResponse)
+async def kill_all_bots(
+    request: Request,
+    ident: InternalIdentity = Depends(internal_identity),
+) -> KillAllResponse:
+    """Global kill switch — force-stop all of the caller's running bots."""
+    supervisor: Supervisor = request.app.state.supervisor
+    killed = await supervisor.kill_all(user_id=ident.user_id)
+    return KillAllResponse(killed=killed)
+
+
+@router.post("/{bot_id}/kill", response_model=BotStateResponse)
+async def kill_bot(
+    bot_id: str,
+    request: Request,
+    ident: InternalIdentity = Depends(internal_identity),
+) -> BotStateResponse:
+    supervisor: Supervisor = request.app.state.supervisor
+    handle = supervisor._handles.get(bot_id)  # type: ignore[attr-defined]
+    # Same ownership rule as GET: a user can only see/act on their own bots, and
+    # an unknown or foreign bot is indistinguishable (404) to avoid leaking ids.
+    if handle is None or handle.user_id != ident.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="bot not found")
+    await supervisor.kill(bot_id)
+    final = supervisor.get_state(bot_id) or BotState.KILLED
+    return BotStateResponse(bot_id=bot_id, state=final.value)
 
 
 @router.post("/{bot_id}/stop", response_model=BotStateResponse)

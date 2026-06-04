@@ -39,11 +39,19 @@ class ExchangeOrderRouter:
         self._adapter = adapter
         self._publisher = publisher
         self._sessions = session_factory
+        # Resting (acknowledged but unfilled) orders, keyed by exchange_order_id
+        # → symbol. The kill switch / circuit breaker cancel these via
+        # ``cancel_open``. Partial-fill accounting is deferred: an order leaves
+        # this set the moment any fill arrives for it.
+        self._open_orders: dict[str, str] = {}
 
-    async def submit(self, bot_id: str, intent: OrderIntent) -> None:
+    async def submit(self, bot_id: str, intent: OrderIntent) -> list[FillEvent]:
         result = await self._adapter.place_order(intent)
 
         order_row_id = await self._persist_order(bot_id, result.order, result.immediate_fills)
+
+        if result.order.status == "submitted" and not result.immediate_fills:
+            self._open_orders[result.order.exchange_order_id] = intent.symbol
 
         await self._publisher.publish(
             Event(
@@ -62,6 +70,49 @@ class ExchangeOrderRouter:
                     payload=_serialize_fill(fill),
                 )
             )
+        return list(result.immediate_fills)
+
+    async def cancel_open(self, bot_id: str) -> int:
+        """Cancel every resting order for this bot. Returns the count cancelled.
+
+        Called by the Supervisor on kill / circuit-trip. Cancels at the venue,
+        marks the order ``cancelled`` in the DB with an audit row, and emits an
+        ``order_cancelled`` event per order. Best-effort per order: a venue that
+        rejects a cancel (already filled/gone) is logged via the audit trail but
+        does not block the others.
+        """
+        if not self._open_orders:
+            return 0
+        resting = dict(self._open_orders)
+        self._open_orders.clear()
+
+        cancelled: list[tuple[str, str]] = []
+        async with self._sessions() as session:
+            for exchange_order_id, symbol in resting.items():
+                await self._adapter.cancel_order(exchange_order_id)
+                await OrderRepo.set_status_by_exchange_id(
+                    session, exchange_order_id=exchange_order_id, status="cancelled"
+                )
+                await AuditLogRepo.append(
+                    session,
+                    user_id=self._user_id,
+                    bot_id=bot_id,
+                    action="order.cancelled",
+                    detail={"exchange_order_id": exchange_order_id, "symbol": symbol},
+                )
+                cancelled.append((exchange_order_id, symbol))
+            await session.commit()
+
+        for exchange_order_id, symbol in cancelled:
+            await self._publisher.publish(
+                Event(
+                    event_type="order_cancelled",
+                    user_id=self._user_id,
+                    bot_id=bot_id,
+                    payload={"exchange_order_id": exchange_order_id, "symbol": symbol},
+                )
+            )
+        return len(cancelled)
 
     async def deliver_fills(self, bot_id: str, fills: Iterable[FillEvent]) -> None:
         """Publish fills that arrived out-of-band (limit fills, ccxt WS stream).
@@ -71,6 +122,10 @@ class ExchangeOrderRouter:
         """
         async with self._sessions() as session:
             for fill in fills:
+                # An out-of-band fill means a resting order (partially) executed;
+                # drop it from the open set so the kill switch won't try to cancel
+                # an order the venue has already worked.
+                self._open_orders.pop(fill.exchange_order_id, None)
                 # The order row was written when we submitted; we can join via
                 # exchange_order_id when we need it. For now we still want a
                 # fills row even if we can't resolve the parent yet.

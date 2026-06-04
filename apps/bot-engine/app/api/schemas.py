@@ -12,6 +12,17 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field
 
 
+class RiskLimits(BaseModel):
+    """Per-bot risk controls. Enforced by the Supervisor's circuit breaker.
+
+    ``max_loss_quote`` is an absolute loss cap in the strategy's quote currency:
+    once the bot's mark-to-market PnL falls to ``-max_loss_quote`` it auto-pauses
+    and cancels its open orders. ``None`` disables the breaker.
+    """
+
+    max_loss_quote: Decimal | None = Field(default=None, gt=0)
+
+
 class DcaParams(BaseModel):
     strategy_type: Literal["dca"]
     symbol: str
@@ -47,9 +58,14 @@ StrategyConfig = Annotated[
 class StartBotRequest(BaseModel):
     strategy: StrategyConfig
     mode: Literal["paper", "live"] = "paper"
+    risk: RiskLimits = Field(default_factory=RiskLimits)
 
 
 class BotStateResponse(BaseModel):
     bot_id: str
     state: str
     last_error: str | None = None
+
+
+class KillAllResponse(BaseModel):
+    killed: list[str]

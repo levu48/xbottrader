@@ -85,4 +85,28 @@ describe('BotEngineClient', () => {
     expect(call.init.body).toBe('');
     expect(call.init.headers[HEADER_USER]).toBe('u1');
   });
+
+  it('signs the kill request and targets the kill path', async () => {
+    const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
+    const client = new BotEngineClient(
+      'http://upstream:5001',
+      signer,
+      fakeFetch(200, '{"bot_id":"b1","state":"killed"}', captured),
+    );
+    const res = await client.killBot({ userId: 'u1', botId: 'b1' });
+    expect(res.state).toBe('killed');
+    expect(captured.calls[0]!.url).toBe('http://upstream:5001/bots/b1/kill');
+  });
+
+  it('parses the kill-all response shape', async () => {
+    const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
+    const client = new BotEngineClient(
+      'http://upstream:5001',
+      signer,
+      fakeFetch(200, '{"killed":["b1","b2"]}', captured),
+    );
+    const res = await client.killAll({ userId: 'u1' });
+    expect(res.killed).toEqual(['b1', 'b2']);
+    expect(captured.calls[0]!.url).toBe('http://upstream:5001/bots/kill-all');
+  });
 });
