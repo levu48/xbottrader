@@ -11,13 +11,21 @@ Required env vars (any mode):
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from redis.asyncio import Redis as AsyncRedis
+from sqlalchemy import create_engine as create_sync_engine
 
 from .api.auth import InternalAuthenticator
+from .db.models import Base
+from .db.session import create_engine_from_url, make_session_factory
 from .events.publisher import EventPublisher
 from .main import create_app
+
+# Default DB for staging: a SQLite file on a persisted volume. Production swaps
+# this for DATABASE_URL=postgresql+asyncpg://… and applies schema via Alembic.
+_DEFAULT_DATABASE_URL = "sqlite+aiosqlite:////var/lib/xbt/bot-engine.db"
 
 
 def _require_env(name: str) -> str:
@@ -25,6 +33,25 @@ def _require_env(name: str) -> str:
     if not v:
         raise RuntimeError(f"{name} env var must be set")
     return v
+
+
+def _bootstrap_sqlite_schema(database_url: str) -> None:
+    """Create the schema for a SQLite DB on boot.
+
+    The image ships no Alembic step, so the demo/staging SQLite DB needs its
+    tables created the first time the container starts. For a real Postgres
+    URL this is a no-op — migrations own the schema there.
+    """
+    if not database_url.startswith("sqlite"):
+        return
+    # sqlite+aiosqlite:///path → sqlite:///path (sync driver for one-shot DDL)
+    sync_url = database_url.replace("+aiosqlite", "")
+    db_path = sync_url.split(":///", 1)[-1]
+    if db_path and db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    sync_engine = create_sync_engine(sync_url)
+    Base.metadata.create_all(sync_engine)
+    sync_engine.dispose()
 
 
 def build_app() -> FastAPI:
@@ -39,8 +66,14 @@ def build_app() -> FastAPI:
     if mode == "demo":
         from .launchers.demo_paper import DemoPaperLauncher
 
+        database_url = os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+        _bootstrap_sqlite_schema(database_url)
+        session_factory = make_session_factory(create_engine_from_url(database_url))
+
         bar_interval_s = float(os.environ.get("XBT_DEMO_BAR_INTERVAL_S", "5"))
-        launcher = DemoPaperLauncher(publisher, bar_interval_seconds=bar_interval_s)
+        launcher = DemoPaperLauncher(
+            publisher, session_factory, bar_interval_seconds=bar_interval_s
+        )
     elif mode == "prod":
         raise NotImplementedError(
             "production launcher not implemented yet — set XBT_LAUNCHER=demo for staging"

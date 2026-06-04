@@ -4,6 +4,8 @@ import asyncio
 import json
 from decimal import Decimal
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.api.schemas import DcaParams, StartBotRequest
 from app.events.publisher import EventPublisher
 from app.launchers.demo_paper import DemoPaperLauncher
@@ -19,10 +21,12 @@ class FakeRedis:
         return f"{len(self.entries)}-0"
 
 
-async def test_demo_launcher_runs_paper_dca_with_synthetic_bars() -> None:
+async def test_demo_launcher_runs_paper_dca_with_synthetic_bars(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     redis = FakeRedis()
     publisher = EventPublisher(redis)
-    launcher = DemoPaperLauncher(publisher, bar_interval_seconds=0.01)
+    launcher = DemoPaperLauncher(publisher, session_factory, bar_interval_seconds=0.01)
 
     plan = await launcher.launch(
         bot_id="b1",
@@ -60,10 +64,12 @@ async def test_demo_launcher_runs_paper_dca_with_synthetic_bars() -> None:
     assert supervisor.get_state("b1") in (BotState.STOPPED, BotState.STOPPING)
 
 
-async def test_demo_launcher_rejects_non_dca_for_now() -> None:
+async def test_demo_launcher_rejects_non_dca_for_now(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     redis = FakeRedis()
     publisher = EventPublisher(redis)
-    launcher = DemoPaperLauncher(publisher)
+    launcher = DemoPaperLauncher(publisher, session_factory)
 
     import pytest
 

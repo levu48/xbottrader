@@ -11,6 +11,8 @@ import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.events.publisher import EventPublisher
 from app.exchanges.paper import PaperConfig, PaperExchangeAdapter
 from app.runtime.router import ExchangeOrderRouter
@@ -62,12 +64,17 @@ def _bar(ts_ms: int, close: str) -> Bar:
     )
 
 
-async def test_dca_runs_end_to_end_through_paper_exchange() -> None:
+async def test_dca_runs_end_to_end_through_paper_exchange(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     MIN = 60_000
     redis = FakeRedis()
     adapter = PaperExchangeAdapter(config=PaperConfig(slippage_bps=0, fee_bps=10))
     router = ExchangeOrderRouter(
-        user_id="u1", adapter=adapter, publisher=EventPublisher(redis)
+        user_id="u1",
+        adapter=adapter,
+        publisher=EventPublisher(redis),
+        session_factory=session_factory,
     )
 
     supervisor = Supervisor(EventPublisher(redis))

@@ -30,6 +30,11 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       XBT_LAUNCHER: demo
+      # Staging persistence: SQLite on a named volume. Swap for a managed
+      # Postgres URL (postgresql+asyncpg://…) once it's provisioned.
+      DATABASE_URL: sqlite+aiosqlite:////var/lib/xbt/bot-engine.db
+    volumes:
+      - bot-data:/var/lib/xbt
     ports:
       - "5001:5001"
     networks:
@@ -37,6 +42,7 @@ services:
 
 volumes:
   redis-data:
+  bot-data:
 
 networks:
   xbt:

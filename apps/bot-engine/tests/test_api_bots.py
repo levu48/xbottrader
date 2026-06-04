@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.auth import InternalAuthenticator
 from app.api.launcher import BotLauncher, LaunchPlan
+from app.db.models import Base
+from app.db.session import create_engine_from_url, make_session_factory
 from app.events.publisher import EventPublisher
 from app.exchanges.paper import PaperConfig, PaperExchangeAdapter
 from app.main import create_app
@@ -20,6 +26,25 @@ from app.strategies.base import Bar
 from app.strategies.dca import DcaParams, DcaStrategy
 
 SECRET = "shared-internal-secret-test"
+
+
+def _make_session_factory() -> async_sessionmaker[AsyncSession]:
+    """A file-backed SQLite session factory with the live schema applied.
+
+    These control-plane tests drive the app through a (sync) ``TestClient``,
+    which runs the bot's background task on its own event loop. So the DB must
+    be file-backed (in-memory SQLite isn't shared across event loops), and the
+    schema is created with a *synchronous* engine — touching the async engine
+    on a throwaway loop here would leave it bound to a dead loop and the app's
+    first DB write would hang.
+    """
+    path = Path(tempfile.mkdtemp(prefix="xbt-bots-")) / "bot-engine.db"
+
+    sync_engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(sync_engine)
+    sync_engine.dispose()
+
+    return make_session_factory(create_engine_from_url(f"sqlite+aiosqlite:///{path}"))
 
 
 class FakeRedis:
@@ -54,8 +79,13 @@ def _bar(ts_ms: int, close: str, symbol: str = "BTC/USDT") -> Bar:
 class PaperLauncher:
     """Test launcher: build a finite paper run from the start request."""
 
-    def __init__(self, publisher: EventPublisher) -> None:
+    def __init__(
+        self,
+        publisher: EventPublisher,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
         self._publisher = publisher
+        self._sessions = session_factory
         self.last_plan: LaunchPlan | None = None
 
     async def launch(
@@ -80,7 +110,12 @@ class PaperLauncher:
                 interval_minutes=params.interval_minutes,
             )
         )
-        router = ExchangeOrderRouter(user_id=user_id, adapter=adapter, publisher=self._publisher)
+        router = ExchangeOrderRouter(
+            user_id=user_id,
+            adapter=adapter,
+            publisher=self._publisher,
+            session_factory=self._sessions,
+        )
         plan = LaunchPlan(strategy=strategy, bars=bars, router=router)
         self.last_plan = plan
         return plan
@@ -96,7 +131,7 @@ def _signed(method: str, path: str, user_id: str, body: bytes) -> dict[str, str]
 def _client() -> tuple[TestClient, FakeRedis, PaperLauncher]:
     redis = FakeRedis()
     publisher = EventPublisher(redis)
-    launcher = PaperLauncher(publisher)
+    launcher = PaperLauncher(publisher, _make_session_factory())
     auth = InternalAuthenticator(SECRET.encode())
     app = create_app(launcher=launcher, publisher=publisher, internal_auth=auth)
     return TestClient(app), redis, launcher
@@ -116,31 +151,35 @@ def test_start_endpoint_runs_a_bot_end_to_end() -> None:
         }
     ).encode()
 
-    resp = client.post(
-        "/bots/b1/start",
-        content=body,
-        headers={
-            **_signed("POST", "/bots/b1/start", "u1", body),
-            "content-type": "application/json",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["bot_id"] == "b1"
-
-    # Wait for finite bar source to finish
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        # poll status endpoint
-        status_body = b""
-        status_resp = client.get(
-            "/bots/b1",
-            headers=_signed("GET", "/bots/b1", "u1", status_body),
+    # Context-manage the client so a single event loop persists for the whole
+    # test: the bot runs as a background task, and its async DB writes need that
+    # loop alive to complete (a per-request portal would orphan the task).
+    with client:
+        resp = client.post(
+            "/bots/b1/start",
+            content=body,
+            headers={
+                **_signed("POST", "/bots/b1/start", "u1", body),
+                "content-type": "application/json",
+            },
         )
-        if status_resp.json()["state"] == "stopped":
-            break
-        time.sleep(0.01)
-    else:
-        raise AssertionError("bot did not reach stopped state in time")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["bot_id"] == "b1"
+
+        # Wait for finite bar source to finish
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            # poll status endpoint
+            status_body = b""
+            status_resp = client.get(
+                "/bots/b1",
+                headers=_signed("GET", "/bots/b1", "u1", status_body),
+            )
+            if status_resp.json()["state"] == "stopped":
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("bot did not reach stopped state in time")
 
     types = [f["event_type"] for _, f in redis.entries]
     assert types[0] == "bot_started"
@@ -195,12 +234,16 @@ def test_get_endpoint_isolates_users() -> None:
             }
         }
     ).encode()
-    # start as u1
-    client.post(
-        "/bots/b9/start",
-        content=body,
-        headers={**_signed("POST", "/bots/b9/start", "u1", body), "content-type": "application/json"},
-    )
-    # u2 should not see u1's bot
-    resp = client.get("/bots/b9", headers=_signed("GET", "/bots/b9", "u2", b""))
-    assert resp.status_code == 404
+    with client:
+        # start as u1
+        client.post(
+            "/bots/b9/start",
+            content=body,
+            headers={
+                **_signed("POST", "/bots/b9/start", "u1", body),
+                "content-type": "application/json",
+            },
+        )
+        # u2 should not see u1's bot
+        resp = client.get("/bots/b9", headers=_signed("GET", "/bots/b9", "u2", b""))
+        assert resp.status_code == 404
