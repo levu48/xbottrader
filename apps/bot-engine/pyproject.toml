@@ -1,0 +1,37 @@
+[project]
+name = "xbt-bot-engine"
+version = "0.0.0"
+description = "xbottrader Bot Engine — live strategy execution and exchange connectivity"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.2",
+    "sqlalchemy[asyncio]>=2.0.35",
+    "alembic>=1.13.3",
+    "asyncpg>=0.29.0",
+    "redis>=5.1.1",
+    "ccxt>=4.4.0",
+    "cryptography>=43.0.1",
+    "structlog>=24.4.0",
+    "httpx>=0.27.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.6.9",
+    "mypy>=1.11.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

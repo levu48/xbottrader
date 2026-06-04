@@ -1,0 +1,32 @@
+[project]
+name = "xbt-ai-engine"
+version = "0.0.0"
+description = "xbottrader AI Engine — LLM signals, backtesting, market analysis"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.2",
+    "sqlalchemy[asyncio]>=2.0.35",
+    "asyncpg>=0.29.0",
+    "redis>=5.1.1",
+    "anthropic>=0.39.0",
+    "polars>=1.9.0",
+    "vectorbt>=0.26.2",
+    "dramatiq[redis]>=1.17.0",
+    "structlog>=24.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+    "ruff>=0.6.9",
+    "mypy>=1.11.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
