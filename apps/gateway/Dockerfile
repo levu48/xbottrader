@@ -7,7 +7,7 @@
 
 FROM node:22-slim AS deps
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@9.15.2 --activate
+RUN corepack enable   # picks pnpm version from package.json#packageManager
 
 COPY pnpm-workspace.yaml package.json ./
 COPY apps/gateway/package.json apps/gateway/package.json
@@ -18,7 +18,7 @@ RUN pnpm install --prod=false --no-frozen-lockfile
 FROM node:22-slim AS runtime
 WORKDIR /repo
 ENV NODE_ENV=production
-RUN corepack enable && corepack prepare pnpm@9.15.2 --activate
+RUN corepack enable   # picks pnpm version from package.json#packageManager
 
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/gateway/node_modules ./apps/gateway/node_modules

@@ -15,9 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.2
+      - uses: pnpm/action-setup@v4   # reads version from package.json#packageManager
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -46,11 +44,10 @@ jobs:
           uv venv .venv
           uv pip install --python .venv/bin/python -r pyproject.toml
           uv pip install --python .venv/bin/python pytest pytest-asyncio fastapi httpx
+      - uses: pnpm/action-setup@v4   # reads version from package.json#packageManager
       - name: install gateway deps (for cross-language interop test)
         working-directory: ${{ github.workspace }}
-        run: |
-          npm install -g pnpm@9.15.2
-          pnpm install --no-frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
       - name: pytest
         run: .venv/bin/python -m pytest tests/ -q
 
