@@ -1,9 +1,13 @@
 """Demo launcher used for staging deploys.
 
-Lets a deployed Bot Engine run end-to-end without Postgres, without decrypted
-keys, and without a real exchange — useful for validating the infrastructure
-topology (DO Droplet + Reserved IP + Redis + HMAC contract) before the real
-:class:`BotLauncher` exists. Production deploys must NOT use this.
+Lets a deployed Bot Engine run end-to-end without a real exchange or decrypted
+keys — useful for validating the infrastructure topology (DO Droplet +
+Reserved IP + Redis + HMAC contract) before the production launcher exists.
+Production deploys must NOT use this.
+
+It still uses real DB persistence: a ``BotConfigRow`` is created on the fly if
+the supplied bot_id isn't already there, so the audit trail and fills behave
+the same as production.
 """
 
 from __future__ import annotations
@@ -13,8 +17,11 @@ import random
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from ..api.launcher import LaunchPlan
 from ..api.schemas import StartBotRequest
+from ..db.repositories import BotConfigRepo
 from ..events.publisher import EventPublisher
 from ..exchanges.paper import PaperConfig, PaperExchangeAdapter
 from ..runtime.router import ExchangeOrderRouter
@@ -67,20 +74,15 @@ class SyntheticBarSource:
 
 
 class DemoPaperLauncher:
-    """Builds a :class:`LaunchPlan` against synthetic bars + paper exchange.
-
-    A DCA bot will buy ``quote_amount`` worth of the symbol every
-    ``interval_minutes`` (treated as "bars", which tick every
-    ``bar_interval_seconds`` real seconds in demo mode).
-    """
-
     def __init__(
         self,
         publisher: EventPublisher,
+        session_factory: async_sessionmaker[AsyncSession],
         *,
         bar_interval_seconds: float = 5.0,
     ) -> None:
         self._publisher = publisher
+        self._sessions = session_factory
         self._bar_interval_s = bar_interval_seconds
 
     async def launch(
@@ -97,6 +99,21 @@ class DemoPaperLauncher:
                 f"demo launcher only supports DCA strategies (got {params.strategy_type})"
             )
 
+        # Make sure the BotConfig row exists so order/fill FKs hold.
+        async with self._sessions() as session:
+            existing = await BotConfigRepo.get(session, bot_id, user_id=user_id)
+            if existing is None:
+                await BotConfigRepo.create(
+                    session,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    name=f"demo-{bot_id}",
+                    exchange="paper",
+                    mode="paper",
+                    strategy=params.model_dump(mode="json"),
+                )
+            await session.commit()
+
         adapter = PaperExchangeAdapter(config=PaperConfig(slippage_bps=5, fee_bps=10))
         bars = SyntheticBarSource(
             symbol=params.symbol,
@@ -111,6 +128,9 @@ class DemoPaperLauncher:
             )
         )
         router = ExchangeOrderRouter(
-            user_id=user_id, adapter=adapter, publisher=self._publisher
+            user_id=user_id,
+            adapter=adapter,
+            publisher=self._publisher,
+            session_factory=self._sessions,
         )
         return LaunchPlan(strategy=strategy, bars=bars, router=router)

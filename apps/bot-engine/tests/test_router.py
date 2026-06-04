@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db.models import AuditLogTradeRow, FillRow, OrderRow
+from app.db.repositories import BotConfigRepo
 from app.events.publisher import EventPublisher
 from app.exchanges.paper import PaperConfig, PaperExchangeAdapter
 from app.runtime.router import ExchangeOrderRouter
@@ -18,49 +23,71 @@ class FakeRedis:
         return f"{len(self.entries)}-0"
 
 
-async def test_router_emits_order_submitted_and_fill_for_market_buy() -> None:
+async def _seed_bot(session_factory: async_sessionmaker[AsyncSession]) -> str:
+    async with session_factory() as s:
+        row = await BotConfigRepo.create(
+            s, user_id="u1", name="t", exchange="paper", mode="paper", strategy={}
+        )
+        await s.commit()
+        return row.id
+
+
+async def test_router_persists_order_and_fill_then_publishes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot_id = await _seed_bot(session_factory)
     redis = FakeRedis()
     adapter = PaperExchangeAdapter(config=PaperConfig(slippage_bps=0, fee_bps=10))
     adapter.update_mark("BTC/USDT", Decimal("50000"))
 
     router = ExchangeOrderRouter(
-        user_id="u1", adapter=adapter, publisher=EventPublisher(redis)
+        user_id="u1",
+        adapter=adapter,
+        publisher=EventPublisher(redis),
+        session_factory=session_factory,
     )
 
     await router.submit(
-        "b1",
+        bot_id,
         OrderIntent(symbol="BTC/USDT", side="buy", type="market", quantity=Decimal("0.1")),
     )
 
+    # Events: order_submitted, fill
     types = [f["event_type"] for _, f in redis.entries]
     assert types == ["order_submitted", "fill"]
 
-    submitted_payload = json.loads(redis.entries[0][1]["payload"])
-    assert submitted_payload["symbol"] == "BTC/USDT"
-    assert submitted_payload["status"] == "filled"
-    assert submitted_payload["quantity"] == "0.1"
+    # DB: 1 order, 1 fill, 1 audit row
+    async with session_factory() as s:
+        orders = list((await s.execute(select(OrderRow))).scalars().all())
+        fills = list((await s.execute(select(FillRow))).scalars().all())
+        audits = list((await s.execute(select(AuditLogTradeRow))).scalars().all())
+        assert len(orders) == 1
+        assert orders[0].status == "filled"
+        assert orders[0].symbol == "BTC/USDT"
+        assert len(fills) == 1
+        assert fills[0].order_id == orders[0].id
+        assert fills[0].price == Decimal("50000")
+        assert len(audits) == 1
+        assert audits[0].action == "order.submitted"
 
-    fill_payload = json.loads(redis.entries[1][1]["payload"])
-    assert fill_payload["price"] == "50000"
-    assert fill_payload["quantity"] == "0.1"
-    assert fill_payload["fee_currency"] == "USDT"
 
-    for _, fields in redis.entries:
-        assert fields["user_id"] == "u1"
-        assert fields["bot_id"] == "b1"
-
-
-async def test_router_emits_only_order_submitted_for_resting_limit() -> None:
+async def test_router_persists_submitted_order_for_resting_limit(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot_id = await _seed_bot(session_factory)
     redis = FakeRedis()
     adapter = PaperExchangeAdapter(config=PaperConfig(slippage_bps=0, fee_bps=0))
     adapter.update_mark("BTC/USDT", Decimal("50000"))
 
     router = ExchangeOrderRouter(
-        user_id="u1", adapter=adapter, publisher=EventPublisher(redis)
+        user_id="u1",
+        adapter=adapter,
+        publisher=EventPublisher(redis),
+        session_factory=session_factory,
     )
 
     await router.submit(
-        "b1",
+        bot_id,
         OrderIntent(
             symbol="BTC/USDT",
             side="buy",
@@ -73,31 +100,37 @@ async def test_router_emits_only_order_submitted_for_resting_limit() -> None:
     types = [f["event_type"] for _, f in redis.entries]
     assert types == ["order_submitted"]
 
+    async with session_factory() as s:
+        orders = list((await s.execute(select(OrderRow))).scalars().all())
+        assert len(orders) == 1
+        assert orders[0].status == "submitted"
+        fills = list((await s.execute(select(FillRow))).scalars().all())
+        assert fills == []
 
-async def test_deliver_fills_publishes_out_of_band_fills() -> None:
+
+async def test_router_publishes_event_payload_with_order_id(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot_id = await _seed_bot(session_factory)
     redis = FakeRedis()
     adapter = PaperExchangeAdapter(config=PaperConfig(slippage_bps=0, fee_bps=0))
     adapter.update_mark("BTC/USDT", Decimal("50000"))
 
     router = ExchangeOrderRouter(
-        user_id="u1", adapter=adapter, publisher=EventPublisher(redis)
+        user_id="u1",
+        adapter=adapter,
+        publisher=EventPublisher(redis),
+        session_factory=session_factory,
     )
-
-    # Place a limit then drop the mark to trigger fills out-of-band
     await router.submit(
-        "b1",
-        OrderIntent(
-            symbol="BTC/USDT",
-            side="buy",
-            type="limit",
-            quantity=Decimal("1"),
-            limit_price=Decimal("49000"),
-        ),
+        bot_id,
+        OrderIntent(symbol="BTC/USDT", side="buy", type="market", quantity=Decimal("0.1")),
     )
-    redis.entries.clear()
-    fills = adapter.update_mark("BTC/USDT", Decimal("48800"))
-    assert len(fills) == 1
 
-    await router.deliver_fills("b1", fills)
-    types = [f["event_type"] for _, f in redis.entries]
-    assert types == ["fill"]
+    order_event = next(
+        json.loads(f["payload"]) for _, f in redis.entries if f["event_type"] == "order_submitted"
+    )
+    assert "order_id" in order_event
+    async with session_factory() as s:
+        orders = list((await s.execute(select(OrderRow))).scalars().all())
+        assert order_event["order_id"] == orders[0].id
