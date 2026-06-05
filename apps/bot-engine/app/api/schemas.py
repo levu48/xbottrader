@@ -61,10 +61,29 @@ StrategyConfig = Annotated[
 ]
 
 
+class EncryptedKeyEnvelope(BaseModel):
+    """Envelope-encrypted exchange credentials, produced by the Gateway.
+
+    Mirrors ``EncryptedEnvelope`` in app/security/keys.py. The Bot Engine is the
+    only service that decrypts it; the plaintext is JSON
+    ``{"apiKey","secret","password"?}``. Required for ``mode="live"``.
+    """
+
+    v: int
+    dek_iv: str
+    dek_ct: str
+    data_iv: str
+    data_ct: str
+
+
 class StartBotRequest(BaseModel):
     strategy: StrategyConfig
     mode: Literal["paper", "live"] = "paper"
+    # ccxt venue id (e.g. "binance", "coinbase"). Drives the live client and the
+    # public market-data feed; ignored by the synthetic demo launcher.
+    exchange: str = "binance"
     risk: RiskLimits = Field(default_factory=RiskLimits)
+    credentials: EncryptedKeyEnvelope | None = None
 
 
 class BotStateResponse(BaseModel):

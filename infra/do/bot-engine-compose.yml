@@ -29,6 +29,13 @@ services:
       - /etc/xbt/bot-engine.env
     environment:
       REDIS_URL: redis://redis:6379
+      # Staging default: demo launcher (synthetic bars, paper only).
+      # For real venues set XBT_LAUNCHER=prod and provide the prod vars below
+      # via /etc/xbt/bot-engine.env:
+      #   XBT_LAUNCHER=prod
+      #   DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db   # Alembic owns schema: `alembic upgrade head`
+      #   XBT_KEK=<base64 32-byte master key>                       # required: decrypts user API keys
+      #   XBT_ALLOW_LIVE=0                                          # keep 0 until pre-real-money verification passes
       XBT_LAUNCHER: demo
       # Staging persistence: SQLite on a named volume. Swap for a managed
       # Postgres URL (postgresql+asyncpg://…) once it's provisioned.

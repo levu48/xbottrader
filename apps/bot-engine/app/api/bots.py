@@ -36,7 +36,12 @@ async def start_bot(
     supervisor: Supervisor = request.app.state.supervisor
     launcher: BotLauncher = request.app.state.launcher
 
-    plan = await launcher.launch(bot_id=bot_id, user_id=ident.user_id, request=body)
+    try:
+        plan = await launcher.launch(bot_id=bot_id, user_id=ident.user_id, request=body)
+    except ValueError as e:
+        # Launcher rejected the request: live gated off, missing/invalid
+        # credentials, unknown exchange, etc. — a client error, not a 500.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     try:
         await supervisor.start(
             bot_id=bot_id,

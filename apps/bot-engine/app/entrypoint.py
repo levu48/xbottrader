@@ -75,8 +75,17 @@ def build_app() -> FastAPI:
             publisher, session_factory, bar_interval_seconds=bar_interval_s
         )
     elif mode == "prod":
-        raise NotImplementedError(
-            "production launcher not implemented yet — set XBT_LAUNCHER=demo for staging"
+        from .launchers.production import ProductionLauncher
+        from .security.keys import EnvelopeCipher
+
+        database_url = _require_env("DATABASE_URL")  # Postgres in prod; Alembic owns schema
+        _bootstrap_sqlite_schema(database_url)  # no-op for Postgres; helps a local sqlite smoke
+        session_factory = make_session_factory(create_engine_from_url(database_url))
+        cipher = EnvelopeCipher.from_env("XBT_KEK")
+        allow_live = os.environ.get("XBT_ALLOW_LIVE", "0") == "1"
+
+        launcher = ProductionLauncher(
+            publisher, session_factory, cipher, allow_live=allow_live
         )
     else:
         raise RuntimeError(f"unknown XBT_LAUNCHER mode: {mode}")

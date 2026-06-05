@@ -9,10 +9,25 @@ export const RiskLimits = z.object({
 });
 export type RiskLimits = z.infer<typeof RiskLimits>;
 
+// Envelope-encrypted exchange credentials, produced by the Gateway's encrypt
+// path (security/keys.ts). Forwarded verbatim to the Bot Engine, which is the
+// only service that decrypts. Required by the Bot Engine for mode 'live'.
+export const EncryptedKeyEnvelope = z.object({
+  v: z.number().int(),
+  dek_iv: z.string(),
+  dek_ct: z.string(),
+  data_iv: z.string(),
+  data_ct: z.string(),
+});
+export type EncryptedKeyEnvelope = z.infer<typeof EncryptedKeyEnvelope>;
+
 export const StartBotRequest = z.object({
   strategy: StrategyConfig,
   mode: z.enum(['paper', 'live']).default('paper'),
+  // ccxt venue id (e.g. 'binance'); drives the live client + market-data feed.
+  exchange: z.string().optional(),
   risk: RiskLimits.optional(),
+  credentials: EncryptedKeyEnvelope.optional(),
 });
 export type StartBotRequest = z.infer<typeof StartBotRequest>;
 

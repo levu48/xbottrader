@@ -177,13 +177,21 @@ That `git pull`s and rebuilds the compose stack.
   services need to share Redis once the Gateway consumes `xbt.events` for
   real WS fanout. Add a `redis` cluster in the App Platform UI or via
   `doctl databases create`, then set `REDIS_URL` on both sides.
-- **Postgres** → not wired. `BotConfig` / `Order` / `Fill` / audit log are
-  in-memory until SQLAlchemy ships.
+- **Postgres** → schema and Alembic migration exist; staging still runs
+  SQLite on the Droplet volume. For prod set
+  `DATABASE_URL=postgresql+asyncpg://…` and apply the schema with
+  `alembic upgrade head` (the boot-time SQLite bootstrap is a no-op for PG).
 - **Real auth** → Gateway accepts `x-dev-user`. Lucia/Clerk goes in
   `apps/gateway/src/auth/`.
-- **Production `BotLauncher`** → `XBT_LAUNCHER=demo` only. Replace with one
-  that reads bot config from Postgres + decrypts the user's exchange API
-  key + builds the right adapter (ccxt for live, paper for paper).
+- **Production `BotLauncher`** → built (`XBT_LAUNCHER=prod`): ensures the bot
+  row in Postgres, builds a paper adapter (real prices via public ccxt) or a
+  live ccxt adapter, with market data from a polling `CcxtBarSource`. The live
+  client decrypts the user's key (envelope passed in the signed start request,
+  `XBT_KEK` required). **Real-money orders are gated behind `XBT_ALLOW_LIVE=1`**
+  — keep it off until the plan's pre-real-money verification passes (kill-switch
+  <5s, key-handling audit, backtest↔live parity). Still deferred: the Gateway
+  *storing/fetching* user keys (ships with auth) and per-venue ccxt precision
+  normalization.
 - **Doppler / Infisical for secrets** → currently App Platform env vars +
   `/etc/xbt/bot-engine.env` on the Droplet. Migrate when secret rotation
   becomes a real workflow.

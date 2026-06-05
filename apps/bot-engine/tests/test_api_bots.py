@@ -309,6 +309,28 @@ def test_kill_endpoint_isolates_users() -> None:
         assert resp.status_code == 404
 
 
+class RaisingLauncher:
+    """Launcher that rejects the request — e.g. live gated off / bad credentials."""
+
+    async def launch(self, *, bot_id: str, user_id: str, request: object) -> LaunchPlan:
+        raise ValueError("live trading disabled: set XBT_ALLOW_LIVE=1 to enable")
+
+
+def test_start_maps_launcher_value_error_to_400() -> None:
+    publisher = EventPublisher(FakeRedis())
+    auth = InternalAuthenticator(SECRET.encode())
+    app = create_app(launcher=RaisingLauncher(), publisher=publisher, internal_auth=auth)
+    client = TestClient(app)
+    body = _start_body()
+    resp = client.post(
+        "/bots/x1/start",
+        content=body,
+        headers={**_signed("POST", "/bots/x1/start", "u1", body), "content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert "live trading disabled" in resp.text
+
+
 def test_kill_all_endpoint_scopes_to_caller() -> None:
     client, _, _ = _client()
     body = _start_body()
