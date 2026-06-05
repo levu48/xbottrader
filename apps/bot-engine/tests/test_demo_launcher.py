@@ -64,29 +64,29 @@ async def test_demo_launcher_runs_paper_dca_with_synthetic_bars(
     assert supervisor.get_state("b1") in (BotState.STOPPED, BotState.STOPPING)
 
 
-async def test_demo_launcher_rejects_non_dca_for_now(
+async def test_demo_launcher_builds_grid_bot(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    from app.api.schemas import GridParams
+    from app.strategies.grid import GridStrategy
+
     redis = FakeRedis()
     publisher = EventPublisher(redis)
     launcher = DemoPaperLauncher(publisher, session_factory)
 
-    import pytest
-
-    from app.api.schemas import GridParams
-
-    with pytest.raises(ValueError, match="DCA"):
-        await launcher.launch(
-            bot_id="b1",
-            user_id="u1",
-            request=StartBotRequest(
-                strategy=GridParams(
-                    strategy_type="grid",
-                    symbol="BTC/USDT",
-                    lower_price=Decimal("49000"),
-                    upper_price=Decimal("51000"),
-                    grid_levels=5,
-                    total_quote=Decimal("500"),
-                ),
+    plan = await launcher.launch(
+        bot_id="b1",
+        user_id="u1",
+        request=StartBotRequest(
+            strategy=GridParams(
+                strategy_type="grid",
+                symbol="BTC/USDT",
+                lower_price=Decimal("49000"),
+                upper_price=Decimal("51000"),
+                grid_levels=5,
+                total_quote=Decimal("500"),
             ),
-        )
+        ),
+    )
+
+    assert isinstance(plan.strategy, GridStrategy)

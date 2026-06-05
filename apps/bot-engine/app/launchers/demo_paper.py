@@ -26,7 +26,7 @@ from ..events.publisher import EventPublisher
 from ..exchanges.paper import PaperConfig, PaperExchangeAdapter
 from ..runtime.router import ExchangeOrderRouter
 from ..strategies.base import Bar
-from ..strategies.dca import DcaParams, DcaStrategy
+from ..strategies.factory import build_strategy
 
 
 class SyntheticBarSource:
@@ -94,10 +94,6 @@ class DemoPaperLauncher:
     ) -> LaunchPlan:
         assert isinstance(request, StartBotRequest), "demo launcher needs a StartBotRequest"
         params = request.strategy
-        if params.strategy_type != "dca":
-            raise ValueError(
-                f"demo launcher only supports DCA strategies (got {params.strategy_type})"
-            )
 
         # Make sure the BotConfig row exists so order/fill FKs hold.
         async with self._sessions() as session:
@@ -120,13 +116,7 @@ class DemoPaperLauncher:
             adapter=adapter,
             interval_seconds=self._bar_interval_s,
         )
-        strategy = DcaStrategy(
-            DcaParams(
-                symbol=params.symbol,
-                quote_amount=params.quote_amount,
-                interval_minutes=params.interval_minutes,
-            )
-        )
+        strategy = build_strategy(params)
         router = ExchangeOrderRouter(
             user_id=user_id,
             adapter=adapter,

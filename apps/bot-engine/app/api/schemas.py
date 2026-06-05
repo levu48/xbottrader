@@ -9,7 +9,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RiskLimits(BaseModel):
@@ -47,6 +47,12 @@ class MaCrossoverParams(BaseModel):
     fast_period: int = Field(ge=2)
     slow_period: int = Field(ge=3)
     position_quote: Decimal = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _slow_exceeds_fast(self) -> "MaCrossoverParams":
+        if self.slow_period <= self.fast_period:
+            raise ValueError("slow_period must exceed fast_period")
+        return self
 
 
 StrategyConfig = Annotated[
