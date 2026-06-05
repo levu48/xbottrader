@@ -54,10 +54,50 @@ services:
       - key: BOT_ENGINE_URL
         scope: RUN_TIME
         value: ${BOT_ENGINE_URL}      # http://<droplet-reserved-ip>:5001
+      - key: AI_ENGINE_URL
+        scope: RUN_TIME
+        value: ${ai-engine.PRIVATE_URL}   # internal App Platform networking
       - key: XBT_KEK
         scope: RUN_TIME
         type: SECRET
         value: ${XBT_KEK}
+
+  # AI Engine on App Platform (no exchange egress → no Reserved-IP constraint).
+  # Internal-only: the gateway reaches it via ${ai-engine.PRIVATE_URL}; it is not
+  # routed publicly. Trades come from the Bot Engine, never from here.
+  - name: ai-engine
+    instance_size_slug: basic-xs
+    instance_count: 1
+    http_port: 5002
+    internal_ports:
+      - 5002
+    dockerfile_path: apps/ai-engine/Dockerfile
+    source_dir: /
+    github:
+      repo: REPLACE_ME/xbottrader
+      branch: main
+      deploy_on_push: true
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 20
+      period_seconds: 15
+      timeout_seconds: 5
+      failure_threshold: 3
+    envs:
+      - key: GATEWAY_INTERNAL_HMAC_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${GATEWAY_INTERNAL_HMAC_SECRET}
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${ANTHROPIC_API_KEY}
+      - key: XBT_COPILOT_MODEL
+        scope: RUN_TIME
+        value: claude-sonnet-4-6
+      - key: XBT_BACKTEST_EXCHANGE
+        scope: RUN_TIME
+        value: kraken
 
   - name: web
     instance_size_slug: basic-xxs
