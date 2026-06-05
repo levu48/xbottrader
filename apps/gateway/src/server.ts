@@ -3,8 +3,10 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { hostname } from 'node:os';
 
+import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
+import { registerAiRoutes } from './routes/ai.js';
 import { registerBotsRoutes } from './routes/bots.js';
 import { EventStreamConsumer } from './ws/consumer.js';
 import { IoredisStreamReader } from './ws/redis-reader.js';
@@ -28,9 +30,12 @@ async function main(): Promise<void> {
   const registry = new ConnectionRegistry();
 
   const botEngineUrl = process.env.BOT_ENGINE_URL ?? 'http://localhost:5001';
+  const aiEngineUrl = process.env.AI_ENGINE_URL ?? 'http://localhost:5002';
   const signer = InternalAuthSigner.fromEnv();
   const botClient = new BotEngineClient(botEngineUrl, signer);
+  const aiClient = new AiEngineClient(aiEngineUrl, signer);
   await registerBotsRoutes(app, { bot: botClient });
+  await registerAiRoutes(app, { ai: aiClient });
 
   app.get('/healthz', async () => ({ ok: true }));
 
