@@ -3,9 +3,12 @@
 # Build context MUST be the monorepo root. Build with:
 #
 #     docker build -f apps/bot-engine/Dockerfile -t xbt-bot-engine .
+#
+# The repo layout is mirrored under /repo so the local `xbt-core` path
+# dependency (../../packages/xbt-core) resolves the same as in dev.
 
 FROM python:3.12-slim
-WORKDIR /app
+WORKDIR /repo
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -20,10 +23,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install uv
 
-COPY apps/bot-engine/pyproject.toml ./
-RUN uv pip install --system --no-cache -r pyproject.toml
+# Shared package first (its own layer for caching), then the app deps. The
+# explicit install guarantees xbt-core is present even if the resolver skips it.
+COPY packages/xbt-core ./packages/xbt-core
+RUN uv pip install --system --no-cache ./packages/xbt-core
 
-COPY apps/bot-engine/app ./app
+COPY apps/bot-engine/pyproject.toml ./apps/bot-engine/pyproject.toml
+RUN uv pip install --system --no-cache -r apps/bot-engine/pyproject.toml
+
+COPY apps/bot-engine/app ./apps/bot-engine/app
+COPY apps/bot-engine/alembic ./apps/bot-engine/alembic
+COPY apps/bot-engine/alembic.ini ./apps/bot-engine/alembic.ini
+
+WORKDIR /repo/apps/bot-engine
 
 EXPOSE 5001
 
