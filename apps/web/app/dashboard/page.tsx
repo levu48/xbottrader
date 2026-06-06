@@ -158,6 +158,14 @@ export default function DashboardPage() {
       </div>
 
       <div style={card}>
+        <h3 style={{ marginTop: 0 }}>
+          {symbol} — fill price{' '}
+          <span style={{ color: '#999', fontWeight: 400, fontSize: 13 }}>(live)</span>
+        </h3>
+        <PriceChart values={fills.map((f) => Number(f.payload.price)).reverse()} />
+      </div>
+
+      <div style={card}>
         <h3 style={{ marginTop: 0 }}>Fills</h3>
         {fills.length === 0 ? (
           <p style={{ color: '#666' }}>No fills yet — start a bot above.</p>
@@ -195,6 +203,43 @@ export default function DashboardPage() {
         )}
       </div>
     </main>
+  );
+}
+
+// Dependency-free SVG line chart. x = sample index, y = value; auto-scaled.
+function PriceChart({ values }: { values: number[] }) {
+  if (values.length < 2) {
+    return <p style={{ color: '#666', margin: 0 }}>Waiting for fills… (need at least 2)</p>;
+  }
+  const W = 640;
+  const H = 200;
+  const pad = 24;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const n = values.length;
+  const x = (i: number) => pad + (n === 1 ? 0 : (i / (n - 1)) * (W - 2 * pad));
+  const y = (v: number) => H - pad - ((v - min) / span) * (H - 2 * pad);
+  const d = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+  const last = values[n - 1]!;
+  const first = values[0]!;
+  const up = last >= first;
+  const stroke = up ? '#16a34a' : '#dc2626';
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: H }} preserveAspectRatio="none">
+        {/* baseline + area */}
+        <path d={`${d} L${x(n - 1).toFixed(1)} ${H - pad} L${x(0).toFixed(1)} ${H - pad} Z`} fill={stroke} opacity={0.08} />
+        <path d={d} fill="none" stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <circle cx={x(n - 1)} cy={y(last)} r={3} fill={stroke} />
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b7280' }}>
+        <span>low {min.toFixed(2)}</span>
+        <span style={{ color: stroke, fontWeight: 600 }}>last {last.toFixed(2)}</span>
+        <span>high {max.toFixed(2)}</span>
+      </div>
+    </div>
   );
 }
 
