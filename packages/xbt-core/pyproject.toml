@@ -5,6 +5,12 @@ description = "xbottrader shared domain — strategies, paper fill model, intern
 requires-python = ">=3.12"
 dependencies = []
 
+# The pure strategy domain has no runtime deps. The shared control-plane schema
+# (xbt_core.strategy_config) needs pydantic; install it with the `schemas` extra.
+# Both apps already depend on pydantic directly, so the import resolves there.
+[project.optional-dependencies]
+schemas = ["pydantic>=2.9.2"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
