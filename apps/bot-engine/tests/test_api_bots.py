@@ -249,6 +249,32 @@ def test_get_endpoint_isolates_users() -> None:
         assert resp.status_code == 404
 
 
+def test_same_bot_id_isolated_per_user() -> None:
+    # Two users each starting "b1" must both succeed (per-user namespacing) —
+    # this is the regression for the UNIQUE-constraint 500 on bot_configs.id.
+    client, _, _ = _client()
+    body = json.dumps(
+        {"strategy": {"strategy_type": "dca", "symbol": "BTC/USDT", "quote_amount": "100", "interval_minutes": 1}}
+    ).encode()
+    with client:
+        r1 = client.post(
+            "/bots/b1/start",
+            content=body,
+            headers={**_signed("POST", "/bots/b1/start", "u1", body), "content-type": "application/json"},
+        )
+        r2 = client.post(
+            "/bots/b1/start",
+            content=body,
+            headers={**_signed("POST", "/bots/b1/start", "u2", body), "content-type": "application/json"},
+        )
+        assert r1.status_code == 200, r1.text
+        assert r2.status_code == 200, r2.text  # would have collided before the fix
+        assert r1.json()["bot_id"] == "b1" and r2.json()["bot_id"] == "b1"
+        # each user sees their own "b1"
+        assert client.get("/bots/b1", headers=_signed("GET", "/bots/b1", "u1", b"")).status_code == 200
+        assert client.get("/bots/b1", headers=_signed("GET", "/bots/b1", "u2", b"")).status_code == 200
+
+
 def _start_body() -> bytes:
     return json.dumps(
         {

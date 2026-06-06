@@ -23,6 +23,12 @@ function wsUrl(): string {
   return `${proto}//${window.location.host}/ws`;
 }
 
+// Events carry the internal per-user id "<userId>:<botId>"; show the plain part.
+function displayBot(id: string): string {
+  const i = id.indexOf(':');
+  return i === -1 ? id : id.slice(i + 1);
+}
+
 const card: React.CSSProperties = { border: '1px solid #e5e5e5', borderRadius: 8, padding: 16, marginBottom: 16 };
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 6, marginRight: 8, fontSize: 14 };
 const btn: React.CSSProperties = { padding: '6px 12px', border: '1px solid #2563eb', background: '#2563eb', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
@@ -162,7 +168,7 @@ export default function DashboardPage() {
               {fills.slice(0, 50).map((f, i) => (
                 <tr key={`${f.ts}-${i}`} style={{ borderTop: '1px solid #eee' }}>
                   <td style={{ color: '#888' }}>{f.ts.slice(11, 19)}</td>
-                  <td>{f.bot_id}</td>
+                  <td>{displayBot(f.bot_id)}</td>
                   <td style={{ color: f.payload.side === 'buy' ? '#16a34a' : '#dc2626' }}>{String(f.payload.side)}</td>
                   <td>{String(f.payload.quantity)}</td>
                   <td>{String(f.payload.price)}</td>
@@ -182,7 +188,7 @@ export default function DashboardPage() {
           <ul style={{ listStyle: 'none', padding: 0, fontFamily: 'monospace', fontSize: 12, margin: 0 }}>
             {events.slice(0, 60).map((e, i) => (
               <li key={`${e.ts}-${i}`} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
-                <span style={{ color: '#999' }}>{e.ts.slice(11, 19)}</span> <strong>{e.event_type}</strong> <span style={{ color: '#777' }}>{e.bot_id}</span>
+                <span style={{ color: '#999' }}>{e.ts.slice(11, 19)}</span> <strong>{e.event_type}</strong> <span style={{ color: '#777' }}>{displayBot(e.bot_id)}</span>
               </li>
             ))}
           </ul>
