@@ -13,7 +13,7 @@ class FakeUpstream {
   }
 }
 
-const makeClient = (responder: (path: string, init: { body: string }) => { status: number; body: string }): BotEngineClient => {
+const makeClient = (responder: (path: string, init: { body?: string }) => { status: number; body: string }): BotEngineClient => {
   return new BotEngineClient('http://stub', new InternalAuthSigner('s'), async (url, init) => {
     const path = new URL(url).pathname;
     const r = responder(path, init);
@@ -25,7 +25,7 @@ describe('bots routes', () => {
   it('forwards a start request to the bot engine and returns the upstream response', async () => {
     const seen: { path: string; body: string }[] = [];
     const client = makeClient((path, init) => {
-      seen.push({ path, body: init.body });
+      seen.push({ path, body: init.body ?? '' });
       return { status: 200, body: '{"bot_id":"b1","state":"starting"}' };
     });
 

@@ -5,7 +5,7 @@ import { InternalAuthSigner } from '../clients/internal-auth.js';
 import { registerAiRoutes } from './ai.js';
 
 const makeClient = (
-  responder: (path: string, init: { body: string }) => { status: number; body: string },
+  responder: (path: string, init: { body?: string }) => { status: number; body: string },
 ): AiEngineClient => {
   return new AiEngineClient('http://stub', new InternalAuthSigner('s'), async (url, init) => {
     const path = new URL(url).pathname;
@@ -18,7 +18,7 @@ describe('ai routes', () => {
   it('forwards a copilot chat and returns the upstream reply', async () => {
     const seen: { path: string; body: string }[] = [];
     const client = makeClient((path, init) => {
-      seen.push({ path, body: init.body });
+      seen.push({ path, body: init.body ?? '' });
       return { status: 200, body: '{"reply":"hello","usage":{}}' };
     });
     const app = Fastify();

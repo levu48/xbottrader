@@ -54,7 +54,7 @@ export class BotEngineError extends Error {
 
 export type FetchLike = (
   input: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body?: string },
 ) => Promise<{ status: number; text(): Promise<string> }>;
 
 export class BotEngineClient {
@@ -107,11 +107,14 @@ export class BotEngineClient {
   }
 
   async #send(method: string, path: string, userId: string, body: string): Promise<string> {
+    // Sign over the (possibly empty) body, but don't attach a body to GET/HEAD —
+    // undici's fetch rejects "GET/HEAD with body", even an empty string.
     const headers = this.signer.sign({ method, path, userId, body });
+    const hasBody = method !== 'GET' && method !== 'HEAD';
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: { ...headers, 'content-type': 'application/json' },
-      body,
+      ...(hasBody ? { body } : {}),
     });
     const text = await res.text();
     if (res.status >= 400) {

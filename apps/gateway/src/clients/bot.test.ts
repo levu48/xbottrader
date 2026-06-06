@@ -98,6 +98,23 @@ describe('BotEngineClient', () => {
     expect(captured.calls[0]!.url).toBe('http://upstream:5001/bots/b1/kill');
   });
 
+  it('does not attach a body to the GET state request', async () => {
+    // undici rejects GET/HEAD with a body (even ''); regression for a live 500.
+    const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
+    const client = new BotEngineClient(
+      'http://upstream:5001',
+      signer,
+      fakeFetch(200, '{"bot_id":"b1","state":"running"}', captured),
+    );
+    const res = await client.getBot({ userId: 'u1', botId: 'b1' });
+    expect(res.state).toBe('running');
+    const call = captured.calls[0]!;
+    expect(call.init.method).toBe('GET');
+    expect(call.init.body).toBeUndefined();
+    // still signed (over the empty body)
+    expect(call.init.headers[HEADER_SIG]).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('parses the kill-all response shape', async () => {
     const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
     const client = new BotEngineClient(
