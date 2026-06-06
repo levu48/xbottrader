@@ -78,9 +78,13 @@ export default function DashboardPage() {
 
   const api = useCallback(
     async (path: string, body?: unknown): Promise<{ ok: boolean; text: string }> => {
+      // Only set a JSON content-type when there IS a body — Fastify 400s on an
+      // empty body with content-type: application/json (the kill / kill-all calls).
+      const headers: Record<string, string> = { 'x-dev-user': userId };
+      if (body) headers['content-type'] = 'application/json';
       const res = await fetch(path, {
         method: 'POST',
-        headers: { 'x-dev-user': userId, 'content-type': 'application/json' },
+        headers,
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
       return { ok: res.ok, text: await res.text() };
