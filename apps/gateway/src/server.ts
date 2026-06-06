@@ -1,50 +1,67 @@
+import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { hostname } from 'node:os';
 
+import { makeRequireUser, resolveUserId } from './auth/middleware.js';
+import { registerAuthRoutes } from './auth/routes.js';
+import { RedisSessionStore } from './auth/sessions.js';
 import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
+import { createDb } from './db/client.js';
+import { DrizzleAuditLog, DrizzleKeyStore, DrizzleUserStore } from './db/repos.js';
+import { registerKeysRoutes } from './keys/routes.js';
 import { registerAiRoutes } from './routes/ai.js';
 import { registerBotsRoutes } from './routes/bots.js';
+import { EnvelopeCipher } from './security/keys.js';
 import { EventStreamConsumer } from './ws/consumer.js';
 import { IoredisStreamReader } from './ws/redis-reader.js';
 import { ConnectionRegistry } from './ws/registry.js';
 
-// Auth is stubbed for the MVP scaffold. Real implementation: validate a session
-// token (cookie or query) against the sessions table before opening the socket.
-// Tracked in apps/gateway/src/auth/.
-function authStub(token: string | undefined): string | null {
-  if (!token) return null;
-  return token.startsWith('user:') ? token.slice('user:'.length) : null;
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} env var must be set`);
+  return v;
 }
 
 async function main(): Promise<void> {
   const port = Number(process.env.GATEWAY_PORT ?? 4000);
   const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+  const databaseUrl = requireEnv('DATABASE_URL');
 
   const app = Fastify({ logger: { level: 'info' } });
+  await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
 
-  const registry = new ConnectionRegistry();
+  // --- persistence + auth ---
+  const db = createDb(databaseUrl);
+  const users = new DrizzleUserStore(db);
+  const keys = new DrizzleKeyStore(db);
+  const audit = new DrizzleAuditLog(db);
+  const sessionRedis = new Redis(redisUrl);
+  const sessions = new RedisSessionStore(sessionRedis);
+  const cipher = EnvelopeCipher.fromEnv();
+  const requireUser = makeRequireUser(sessions);
 
-  const botEngineUrl = process.env.BOT_ENGINE_URL ?? 'http://localhost:5001';
-  const aiEngineUrl = process.env.AI_ENGINE_URL ?? 'http://localhost:5002';
+  // --- service clients ---
   const signer = InternalAuthSigner.fromEnv();
-  const botClient = new BotEngineClient(botEngineUrl, signer);
-  const aiClient = new AiEngineClient(aiEngineUrl, signer);
-  await registerBotsRoutes(app, { bot: botClient });
-  await registerAiRoutes(app, { ai: aiClient });
+  const botClient = new BotEngineClient(process.env.BOT_ENGINE_URL ?? 'http://localhost:5001', signer);
+  const aiClient = new AiEngineClient(process.env.AI_ENGINE_URL ?? 'http://localhost:5002', signer);
+
+  // --- routes ---
+  await registerAuthRoutes(app, { users, sessions, audit });
+  await registerKeysRoutes(app, { keys, cipher, requireUser });
+  await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users });
+  await registerAiRoutes(app, { ai: aiClient, requireUser });
 
   app.get('/healthz', async () => ({ ok: true }));
 
-  app.get('/ws', { websocket: true }, (socket, req) => {
-    const token =
-      typeof req.query === 'object' && req.query !== null && 'token' in req.query
-        ? String((req.query as { token: unknown }).token)
-        : undefined;
-    const userId = authStub(token);
+  const registry = new ConnectionRegistry();
+  app.get('/ws', { websocket: true }, async (socket, req) => {
+    // Cookie-based: the browser sends xbt_session on the same-origin WS upgrade.
+    const userId = await resolveUserId(req, sessions);
     if (!userId) {
       socket.close(4401, 'unauthenticated');
       return;
@@ -67,6 +84,7 @@ async function main(): Promise<void> {
     consumer.stop();
     await app.close();
     redisCmd.disconnect();
+    sessionRedis.disconnect();
   };
   process.on('SIGINT', () => void shutdown().then(() => process.exit(0)));
   process.on('SIGTERM', () => void shutdown().then(() => process.exit(0)));

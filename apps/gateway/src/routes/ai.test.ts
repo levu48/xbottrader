@@ -1,8 +1,18 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
+import type { RequireUser } from '../auth/middleware.js';
 import { AiEngineClient } from '../clients/ai.js';
 import { InternalAuthSigner } from '../clients/internal-auth.js';
 import { registerAiRoutes } from './ai.js';
+
+const devRequireUser: RequireUser = async (req, reply) => {
+  const u = req.headers['x-dev-user'];
+  if (typeof u === 'string' && u) req.userId = u;
+  else await reply.status(401).send({ error: 'unauthenticated' });
+};
+
+const reg = (app: FastifyInstance, ai: AiEngineClient): Promise<void> =>
+  registerAiRoutes(app, { ai, requireUser: devRequireUser });
 
 const makeClient = (
   responder: (path: string, init: { body?: string }) => { status: number; body: string },
@@ -22,7 +32,7 @@ describe('ai routes', () => {
       return { status: 200, body: '{"reply":"hello","usage":{}}' };
     });
     const app = Fastify();
-    await registerAiRoutes(app, { ai: client });
+    await reg(app, client);
 
     const res = await app.inject({
       method: 'POST',
@@ -45,7 +55,7 @@ describe('ai routes', () => {
       return { status: 200, body: '{"symbol":"BTC/USDT","bars":5,"stats":{},"equity_curve":[]}' };
     });
     const app = Fastify();
-    await registerAiRoutes(app, { ai: client });
+    await reg(app, client);
 
     const res = await app.inject({
       method: 'POST',
@@ -73,7 +83,7 @@ describe('ai routes', () => {
   it('rejects requests without an authenticated user', async () => {
     const client = makeClient(() => ({ status: 200, body: '{}' }));
     const app = Fastify();
-    await registerAiRoutes(app, { ai: client });
+    await reg(app, client);
     const res = await app.inject({
       method: 'POST',
       url: '/v1/ai/copilot/chat',
@@ -86,7 +96,7 @@ describe('ai routes', () => {
   it('returns 400 on an invalid backtest body', async () => {
     const client = makeClient(() => ({ status: 200, body: '{}' }));
     const app = Fastify();
-    await registerAiRoutes(app, { ai: client });
+    await reg(app, client);
     const res = await app.inject({
       method: 'POST',
       url: '/v1/ai/backtest',
@@ -100,7 +110,7 @@ describe('ai routes', () => {
   it('propagates upstream 4xx responses', async () => {
     const client = makeClient(() => ({ status: 400, body: 'unknown exchange' }));
     const app = Fastify();
-    await registerAiRoutes(app, { ai: client });
+    await reg(app, client);
     const res = await app.inject({
       method: 'POST',
       url: '/v1/ai/copilot/chat',
