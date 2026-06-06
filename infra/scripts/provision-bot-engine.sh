@@ -54,7 +54,12 @@ echo "==> allocating Reserved IP"
 RESERVED_IP="$(doctl compute reserved-ip create --region "$REGION" --format IP --no-header)"
 echo "    reserved ip: $RESERVED_IP"
 
-doctl compute reserved-ip-action assign "$RESERVED_IP" "$DROPLET_ID" --wait
+# NOTE: `reserved-ip-action assign` has no --wait in current doctl; poll instead.
+doctl compute reserved-ip-action assign "$RESERVED_IP" "$DROPLET_ID"
+for _ in $(seq 1 24); do
+    [ "$(doctl compute reserved-ip get "$RESERVED_IP" --format DropletID --no-header)" = "$DROPLET_ID" ] && break
+    sleep 5
+done
 
 echo "==> firewall"
 FW_NAME="xbt-bot-engine-fw"
