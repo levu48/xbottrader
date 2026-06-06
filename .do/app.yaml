@@ -27,7 +27,7 @@ services:
     dockerfile_path: apps/gateway/Dockerfile
     source_dir: /
     github:
-      repo: REPLACE_ME/xbottrader
+      repo: levu48/xbottrader
       branch: main
       deploy_on_push: true
     health_check:
@@ -69,12 +69,10 @@ services:
     instance_size_slug: basic-xs
     instance_count: 1
     http_port: 5002
-    internal_ports:
-      - 5002
     dockerfile_path: apps/ai-engine/Dockerfile
     source_dir: /
     github:
-      repo: REPLACE_ME/xbottrader
+      repo: levu48/xbottrader
       branch: main
       deploy_on_push: true
     health_check:
@@ -107,7 +105,7 @@ services:
     build_command: pnpm install --no-frozen-lockfile && pnpm build
     run_command: pnpm start
     github:
-      repo: REPLACE_ME/xbottrader
+      repo: levu48/xbottrader
       branch: main
       deploy_on_push: true
     envs:
