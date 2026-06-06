@@ -1,44 +1,32 @@
-# docker-compose stack that runs on the Bot Engine Droplet.
+# docker-compose stack for the Bot Engine Droplet.
 # - bot-engine: the FastAPI control plane (port 5001)
-# - redis:     local Redis for event streams. Once we add DO Managed Caching,
-#              point REDIS_URL at it and drop this service.
 #
-# Secrets come from /etc/xbt/bot-engine.env on the host (not in git).
-# See infra/README.md.
+# Redis is now the shared DO Managed Caching (Valkey) instance — the same one the
+# Gateway consumes — so fills published here reach the Gateway's WS fanout. Set
+# REDIS_URL (rediss://…) in /etc/xbt/bot-engine.env alongside the other secrets.
+#
+# Secrets come from /etc/xbt/bot-engine.env on the host (not in git). See infra/README.md.
 
 services:
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-    networks:
-      - xbt
-    # Not exposed on the host — only reachable from inside this compose network.
-
   bot-engine:
     build:
       context: /opt/xbt/xbottrader
       dockerfile: apps/bot-engine/Dockerfile
     image: xbt/bot-engine:local
     restart: unless-stopped
-    depends_on:
-      - redis
     env_file:
+      # Provides REDIS_URL (shared Valkey), GATEWAY_INTERNAL_HMAC_SECRET, XBT_KEK.
       - /etc/xbt/bot-engine.env
     environment:
-      REDIS_URL: redis://redis:6379
       # Staging default: demo launcher (synthetic bars, paper only).
-      # For real venues set XBT_LAUNCHER=prod and provide the prod vars below
-      # via /etc/xbt/bot-engine.env:
+      # For real venues set these in /etc/xbt/bot-engine.env instead:
       #   XBT_LAUNCHER=prod
-      #   DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db   # Alembic owns schema: `alembic upgrade head`
-      #   XBT_KEK=<base64 32-byte master key>                       # required: decrypts user API keys
-      #   XBT_ALLOW_LIVE=0                                          # keep 0 until pre-real-money verification passes
+      #   DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db   # Alembic owns schema
+      #   XBT_KEK=<base64 32-byte master key>                       # decrypts user API keys
+      #   XBT_ALLOW_LIVE=0                                          # keep 0 until verification passes
       XBT_LAUNCHER: demo
-      # Staging persistence: SQLite on a named volume. Swap for a managed
-      # Postgres URL (postgresql+asyncpg://…) once it's provisioned.
+      # Staging persistence: SQLite on a named volume. Swap for the managed
+      # Postgres URL (postgresql+asyncpg://…) once wired.
       DATABASE_URL: sqlite+aiosqlite:////var/lib/xbt/bot-engine.db
     volumes:
       - bot-data:/var/lib/xbt
@@ -48,7 +36,6 @@ services:
       - xbt
 
 volumes:
-  redis-data:
   bot-data:
 
 networks:
