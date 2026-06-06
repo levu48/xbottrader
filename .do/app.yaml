@@ -100,9 +100,10 @@ services:
     instance_size_slug: basic-xxs
     instance_count: 1
     http_port: 3000
-    source_dir: apps/web
-    build_command: pnpm install --no-frozen-lockfile && pnpm build
-    run_command: pnpm start
+    # Dockerfile (monorepo root) — the npm buildpack can't resolve pnpm's
+    # `workspace:*` dependency on @xbt/shared.
+    dockerfile_path: apps/web/Dockerfile
+    source_dir: /
     github:
       repo: levu48/xbottrader
       branch: main
