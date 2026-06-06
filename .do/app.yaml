@@ -61,6 +61,10 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${XBT_KEK}
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${DATABASE_URL}   # managed Postgres URI; gateway migrates on boot
 
   # AI Engine on App Platform (no exchange egress → no Reserved-IP constraint).
   # Internal-only: the gateway reaches it via ${ai-engine.PRIVATE_URL}; it is not
