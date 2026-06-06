@@ -126,16 +126,19 @@ ingress:
           prefix: /v1
       component:
         name: gateway
+        preserve_path_prefix: true   # App Platform strips the matched prefix otherwise
     - match:
         path:
           prefix: /ws
       component:
         name: gateway
+        preserve_path_prefix: true   # App Platform strips the matched prefix otherwise
     - match:
         path:
           prefix: /healthz
       component:
         name: gateway
+        preserve_path_prefix: true   # App Platform strips the matched prefix otherwise
     - match:
         path:
           prefix: /
