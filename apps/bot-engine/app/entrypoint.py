@@ -35,6 +35,24 @@ def _require_env(name: str) -> str:
     return v
 
 
+_REDIS_SCHEMES = ("redis://", "rediss://", "unix://")
+
+
+def _validate_redis_url(redis_url: str) -> str:
+    """Fail fast with a readable message on a blank/garbage REDIS_URL.
+
+    Without this, a misconfigured value (e.g. an env line that resolved to empty)
+    surfaces only as a deep ``redis.from_url`` stack trace at boot.
+    """
+    if not redis_url or not redis_url.startswith(_REDIS_SCHEMES):
+        raise RuntimeError(
+            "REDIS_URL is missing or malformed: expected one of "
+            f"{', '.join(_REDIS_SCHEMES)} (got {redis_url!r}). "
+            "Check /etc/xbt/bot-engine.env on the Droplet."
+        )
+    return redis_url
+
+
 def _bootstrap_sqlite_schema(database_url: str) -> None:
     """Create the schema for a SQLite DB on boot.
 
@@ -55,7 +73,7 @@ def _bootstrap_sqlite_schema(database_url: str) -> None:
 
 
 def build_app() -> FastAPI:
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    redis_url = _validate_redis_url(os.environ.get("REDIS_URL", "redis://localhost:6379"))
     secret = _require_env("GATEWAY_INTERNAL_HMAC_SECRET")
 
     redis = AsyncRedis.from_url(redis_url)
