@@ -15,6 +15,7 @@ interface Me {
 }
 
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
+type StrategyType = 'dca' | 'grid' | 'ma_crossover';
 
 // Same-origin: the gateway owns /ws + /v1 behind the app's ingress, and the
 // browser sends the session cookie on the WS upgrade — no token needed.
@@ -42,8 +43,19 @@ export default function DashboardPage() {
 
   const [botId, setBotId] = useState('bot-1');
   const [symbol, setSymbol] = useState('BTC/USDT');
+  const [strategyType, setStrategyType] = useState<StrategyType>('dca');
+  // DCA
   const [quote, setQuote] = useState('50');
   const [interval, setIntervalMin] = useState('1');
+  // Grid
+  const [lowerPrice, setLowerPrice] = useState('20000');
+  const [upperPrice, setUpperPrice] = useState('40000');
+  const [gridLevels, setGridLevels] = useState('10');
+  const [totalQuote, setTotalQuote] = useState('500');
+  // MA crossover
+  const [fastPeriod, setFastPeriod] = useState('10');
+  const [slowPeriod, setSlowPeriod] = useState('30');
+  const [positionQuote, setPositionQuote] = useState('100');
   const wsRef = useRef<WebSocket | null>(null);
 
   // Auth gate.
@@ -80,14 +92,36 @@ export default function DashboardPage() {
     return { ok: res.ok, text: await res.text() };
   }, []);
 
+  // Build the discriminated strategy payload the Bot Engine expects. Decimal
+  // fields go as strings (pydantic Decimal accepts them); counts as numbers.
+  const buildStrategy = useCallback((): Record<string, unknown> => {
+    switch (strategyType) {
+      case 'grid':
+        return {
+          strategy_type: 'grid', symbol,
+          lower_price: lowerPrice, upper_price: upperPrice,
+          grid_levels: Number(gridLevels), total_quote: totalQuote,
+        };
+      case 'ma_crossover':
+        return {
+          strategy_type: 'ma_crossover', symbol,
+          fast_period: Number(fastPeriod), slow_period: Number(slowPeriod),
+          position_quote: positionQuote,
+        };
+      case 'dca':
+      default:
+        return { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) };
+    }
+  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote]);
+
   const startBot = useCallback(async () => {
     setNotice(null);
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
-      strategy: { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) },
+      strategy: buildStrategy(),
       mode: 'paper',
     });
-    setNotice(r.ok ? `started ${botId}` : `start failed: ${r.text}`);
-  }, [api, botId, symbol, quote, interval]);
+    setNotice(r.ok ? `started ${botId} (${strategyType})` : `start failed: ${r.text}`);
+  }, [api, botId, strategyType, buildStrategy]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -138,14 +172,45 @@ export default function DashboardPage() {
       </p>
 
       <div style={card}>
-        <h3 style={{ marginTop: 0 }}>Start a paper DCA bot</h3>
-        <input style={{ ...input, width: 90 }} value={botId} onChange={(e) => setBotId(e.target.value)} placeholder="bot id" />
-        <input style={{ ...input, width: 110 }} value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="symbol" />
-        <input style={{ ...input, width: 70 }} value={quote} onChange={(e) => setQuote(e.target.value)} placeholder="quote" />
-        <input style={{ ...input, width: 60 }} value={interval} onChange={(e) => setIntervalMin(e.target.value)} placeholder="min" />
-        <button style={btn} onClick={startBot}>Start</button>
-        <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
-        <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
+        <h3 style={{ marginTop: 0 }}>Start a paper bot</h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0 }}>
+          <Field label="bot id"><input style={{ ...input, width: 90 }} value={botId} onChange={(e) => setBotId(e.target.value)} /></Field>
+          <Field label="strategy">
+            <select style={{ ...input, width: 140 }} value={strategyType} onChange={(e) => setStrategyType(e.target.value as StrategyType)}>
+              <option value="dca">DCA</option>
+              <option value="grid">Grid</option>
+              <option value="ma_crossover">MA crossover</option>
+            </select>
+          </Field>
+          <Field label="symbol"><input style={{ ...input, width: 110 }} value={symbol} onChange={(e) => setSymbol(e.target.value)} /></Field>
+
+          {strategyType === 'dca' && (
+            <>
+              <Field label="quote/buy"><input style={{ ...input, width: 70 }} value={quote} onChange={(e) => setQuote(e.target.value)} /></Field>
+              <Field label="interval (min)"><input style={{ ...input, width: 70 }} value={interval} onChange={(e) => setIntervalMin(e.target.value)} /></Field>
+            </>
+          )}
+          {strategyType === 'grid' && (
+            <>
+              <Field label="lower price"><input style={{ ...input, width: 80 }} value={lowerPrice} onChange={(e) => setLowerPrice(e.target.value)} /></Field>
+              <Field label="upper price"><input style={{ ...input, width: 80 }} value={upperPrice} onChange={(e) => setUpperPrice(e.target.value)} /></Field>
+              <Field label="levels"><input style={{ ...input, width: 60 }} value={gridLevels} onChange={(e) => setGridLevels(e.target.value)} /></Field>
+              <Field label="total quote"><input style={{ ...input, width: 80 }} value={totalQuote} onChange={(e) => setTotalQuote(e.target.value)} /></Field>
+            </>
+          )}
+          {strategyType === 'ma_crossover' && (
+            <>
+              <Field label="fast period"><input style={{ ...input, width: 70 }} value={fastPeriod} onChange={(e) => setFastPeriod(e.target.value)} /></Field>
+              <Field label="slow period"><input style={{ ...input, width: 70 }} value={slowPeriod} onChange={(e) => setSlowPeriod(e.target.value)} /></Field>
+              <Field label="position quote"><input style={{ ...input, width: 80 }} value={positionQuote} onChange={(e) => setPositionQuote(e.target.value)} /></Field>
+            </>
+          )}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <button style={btn} onClick={startBot}>Start</button>
+          <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
+          <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
+        </div>
         {notice && <p style={{ marginBottom: 0, color: '#374151', fontSize: 13 }}>{notice}</p>}
       </div>
 
@@ -240,6 +305,16 @@ function PriceChart({ values }: { values: number[] }) {
         <span>high {max.toFixed(2)}</span>
       </div>
     </div>
+  );
+}
+
+// A labeled form control: tiny caption stacked above its input.
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: 'inline-flex', flexDirection: 'column', marginRight: 8, marginBottom: 8 }}>
+      <span style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>{label}</span>
+      {children}
+    </label>
   );
 }
 
