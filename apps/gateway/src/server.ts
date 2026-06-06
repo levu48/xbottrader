@@ -11,6 +11,7 @@ import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
 import { createDb } from './db/client.js';
+import { runMigrations } from './db/migrate.js';
 import { DrizzleAuditLog, DrizzleKeyStore, DrizzleUserStore } from './db/repos.js';
 import { registerKeysRoutes } from './keys/routes.js';
 import { registerAiRoutes } from './routes/ai.js';
@@ -30,6 +31,12 @@ async function main(): Promise<void> {
   const port = Number(process.env.GATEWAY_PORT ?? 4000);
   const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
   const databaseUrl = requireEnv('DATABASE_URL');
+
+  // Apply migrations on boot (single-instance staging). Disable with
+  // XBT_DB_MIGRATE_ON_BOOT=0 to run them out-of-band instead.
+  if (process.env.XBT_DB_MIGRATE_ON_BOOT !== '0') {
+    await runMigrations(databaseUrl);
+  }
 
   const app = Fastify({ logger: { level: 'info' } });
   await app.register(fastifyCookie);
