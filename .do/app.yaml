@@ -68,19 +68,18 @@ services:
   - name: ai-engine
     instance_size_slug: basic-xs
     instance_count: 1
-    http_port: 5002
+    # Internal-only: no http_port → App Platform assigns NO public ingress route.
+    # The gateway reaches it over the VPC via ${ai-engine.PRIVATE_URL}. Listing it
+    # under public ingress (or giving it http_port) makes App Platform auto-create a
+    # "/" route that collides with web/gateway.
+    internal_ports:
+      - 5002
     dockerfile_path: apps/ai-engine/Dockerfile
     source_dir: /
     github:
       repo: levu48/xbottrader
       branch: main
       deploy_on_push: true
-    health_check:
-      http_path: /healthz
-      initial_delay_seconds: 20
-      period_seconds: 15
-      timeout_seconds: 5
-      failure_threshold: 3
     envs:
       - key: GATEWAY_INTERNAL_HMAC_SECRET
         scope: RUN_TIME
@@ -114,4 +113,30 @@ services:
         value: ${GATEWAY_WS_URL}      # wss://gateway-xxxx.ondigitalocean.app/ws
       - key: NEXT_PUBLIC_GATEWAY_HTTP
         scope: BUILD_TIME
-        value: ${GATEWAY_HTTP_URL}    # https://gateway-xxxx.ondigitalocean.app
+        value: ${GATEWAY_HTTP_URL}    # https://<app-domain>  (same origin as web)
+
+# Single-origin path routing. Gateway owns its namespaced prefixes; web owns the
+# rest. ai-engine has NO rule on purpose → no public route (reachable only via
+# ${ai-engine.PRIVATE_URL}). More-specific prefixes must precede the "/" catch-all.
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /v1
+      component:
+        name: gateway
+    - match:
+        path:
+          prefix: /ws
+      component:
+        name: gateway
+    - match:
+        path:
+          prefix: /healthz
+      component:
+        name: gateway
+    - match:
+        path:
+          prefix: /
+      component:
+        name: web
