@@ -1,5 +1,10 @@
 """Pydantic models for the Bot Engine control plane.
 
+The strategy-config models are shared with the AI Engine — they live in
+``xbt_core.strategy_config`` and are re-exported here so the live and backtest
+paths validate identical strategies. This module adds the Bot-Engine-only
+models (risk limits, encrypted credentials, start request, responses).
+
 These mirror the Zod schemas in packages/shared (see notes in §4 of the plan
 about keeping them in sync via a JSON Schema diff in CI).
 """
@@ -7,9 +12,22 @@ about keeping them in sync via a JSON Schema diff in CI).
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Literal, Union
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
+
+# Re-exported so existing `from app.api.schemas import DcaParams, ...` keep working.
+from xbt_core.strategy_config import (  # noqa: F401
+    ActionSpec,
+    Condition,
+    CustomRulesParams,
+    DcaParams,
+    GridParams,
+    IndicatorSpec,
+    MaCrossoverParams,
+    RuleSpec,
+    StrategyConfig,
+)
 
 
 class RiskLimits(BaseModel):
@@ -21,44 +39,6 @@ class RiskLimits(BaseModel):
     """
 
     max_loss_quote: Decimal | None = Field(default=None, gt=0)
-
-
-class DcaParams(BaseModel):
-    strategy_type: Literal["dca"]
-    symbol: str
-    quote_amount: Decimal = Field(gt=0)
-    interval_minutes: int = Field(gt=0)
-
-
-# Grid + MA params are stubbed; they'll be filled in alongside their strategy
-# implementations. Including them now keeps the discriminator stable.
-class GridParams(BaseModel):
-    strategy_type: Literal["grid"]
-    symbol: str
-    lower_price: Decimal = Field(gt=0)
-    upper_price: Decimal = Field(gt=0)
-    grid_levels: int = Field(ge=2, le=200)
-    total_quote: Decimal = Field(gt=0)
-
-
-class MaCrossoverParams(BaseModel):
-    strategy_type: Literal["ma_crossover"]
-    symbol: str
-    fast_period: int = Field(ge=2)
-    slow_period: int = Field(ge=3)
-    position_quote: Decimal = Field(gt=0)
-
-    @model_validator(mode="after")
-    def _slow_exceeds_fast(self) -> "MaCrossoverParams":
-        if self.slow_period <= self.fast_period:
-            raise ValueError("slow_period must exceed fast_period")
-        return self
-
-
-StrategyConfig = Annotated[
-    Union[DcaParams, GridParams, MaCrossoverParams],
-    Field(discriminator="strategy_type"),
-]
 
 
 class EncryptedKeyEnvelope(BaseModel):

@@ -15,6 +15,7 @@ from .base import Strategy
 from .dca import DcaParams, DcaStrategy
 from .grid import GridParams, GridStrategy
 from .ma_crossover import MaCrossoverParams, MaCrossoverStrategy
+from .rule_engine import RuleEngineParams, RuleEngineStrategy
 
 
 class StrategyConfigLike(Protocol):
@@ -49,4 +50,8 @@ def build_strategy(config: StrategyConfigLike | Any) -> Strategy:
                 position_quote=config.position_quote,
             )
         )
+    if config.strategy_type == "custom_rules":
+        # Nested config (indicators/rules) is normalized from the duck-typed
+        # object inside from_config — works for pydantic, dataclass, or dict.
+        return RuleEngineStrategy(RuleEngineParams.from_config(config))
     raise ValueError(f"unknown strategy_type: {config.strategy_type!r}")

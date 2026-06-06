@@ -1,55 +1,30 @@
 """Pydantic models for the AI Engine API.
 
-The strategy-config union mirrors the Bot Engine's (and the shared Zod schema);
-it duck-types into ``xbt_core.strategies.factory.build_strategy`` so backtests
-run the exact live strategy classes.
+The strategy-config models are shared with the Bot Engine — they live in
+``xbt_core.strategy_config`` and are re-exported here. They duck-type into
+``xbt_core.strategies.factory.build_strategy`` so backtests run the exact live
+strategy classes, against the exact same validated config the live path uses.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Literal, Union
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
-
-# ----- strategy config (mirrors bot-engine / shared) -----
-
-
-class DcaParams(BaseModel):
-    strategy_type: Literal["dca"]
-    symbol: str
-    quote_amount: Decimal = Field(gt=0)
-    interval_minutes: int = Field(gt=0)
-
-
-class GridParams(BaseModel):
-    strategy_type: Literal["grid"]
-    symbol: str
-    lower_price: Decimal = Field(gt=0)
-    upper_price: Decimal = Field(gt=0)
-    grid_levels: int = Field(ge=2, le=200)
-    total_quote: Decimal = Field(gt=0)
-
-
-class MaCrossoverParams(BaseModel):
-    strategy_type: Literal["ma_crossover"]
-    symbol: str
-    fast_period: int = Field(ge=2)
-    slow_period: int = Field(ge=3)
-    position_quote: Decimal = Field(gt=0)
-
-    @model_validator(mode="after")
-    def _slow_exceeds_fast(self) -> "MaCrossoverParams":
-        if self.slow_period <= self.fast_period:
-            raise ValueError("slow_period must exceed fast_period")
-        return self
-
-
-StrategyConfig = Annotated[
-    Union[DcaParams, GridParams, MaCrossoverParams],
-    Field(discriminator="strategy_type"),
-]
+# Re-exported so existing `from app.api.schemas import DcaParams, ...` keep working.
+from xbt_core.strategy_config import (  # noqa: F401
+    ActionSpec,
+    Condition,
+    CustomRulesParams,
+    DcaParams,
+    GridParams,
+    IndicatorSpec,
+    MaCrossoverParams,
+    RuleSpec,
+    StrategyConfig,
+)
 
 
 # ----- copilot -----

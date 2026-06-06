@@ -15,6 +15,40 @@ interface Me {
 }
 
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
+type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules';
+
+// --- Custom rule-engine builder shapes (UI-side; flattened to the DSL on send) -
+type IndFn = 'price' | 'value' | 'sma' | 'rsi';
+type CompOp = '<' | '<=' | '>' | '>=' | '==' | 'crossover' | 'crossunder';
+const COMP_OPS: CompOp[] = ['<', '<=', '>', '>=', '==', 'crossover', 'crossunder'];
+
+interface IndicatorRow { name: string; fn: IndFn; period: string; value: string }
+interface TermRow { left: string; op: CompOp; right: string }
+interface RuleRow {
+  combinator: 'and' | 'or';
+  terms: TermRow[];
+  side: 'buy' | 'sell';
+  type: 'market' | 'limit';
+  quote: string;
+  limitOffsetPct: string;
+  cooldownMinutes: string;
+}
+interface CustomCfg { indicators: IndicatorRow[]; rules: RuleRow[] }
+
+// A ready-to-run example: SMA(10) crossing up through SMA(30) buys $100.
+const DEFAULT_CUSTOM: CustomCfg = {
+  indicators: [
+    { name: 'fast', fn: 'sma', period: '10', value: '0' },
+    { name: 'slow', fn: 'sma', period: '30', value: '0' },
+  ],
+  rules: [
+    {
+      combinator: 'and',
+      terms: [{ left: 'fast', op: 'crossover', right: 'slow' }],
+      side: 'buy', type: 'market', quote: '100', limitOffsetPct: '', cooldownMinutes: '0',
+    },
+  ],
+};
 
 // Same-origin: the gateway owns /ws + /v1 behind the app's ingress, and the
 // browser sends the session cookie on the WS upgrade — no token needed.
@@ -42,8 +76,21 @@ export default function DashboardPage() {
 
   const [botId, setBotId] = useState('bot-1');
   const [symbol, setSymbol] = useState('BTC/USDT');
+  const [strategyType, setStrategyType] = useState<StrategyType>('dca');
+  // DCA
   const [quote, setQuote] = useState('50');
   const [interval, setIntervalMin] = useState('1');
+  // Grid
+  const [lowerPrice, setLowerPrice] = useState('20000');
+  const [upperPrice, setUpperPrice] = useState('40000');
+  const [gridLevels, setGridLevels] = useState('10');
+  const [totalQuote, setTotalQuote] = useState('500');
+  // MA crossover
+  const [fastPeriod, setFastPeriod] = useState('10');
+  const [slowPeriod, setSlowPeriod] = useState('30');
+  const [positionQuote, setPositionQuote] = useState('100');
+  // Custom rule engine
+  const [customCfg, setCustomCfg] = useState<CustomCfg>(DEFAULT_CUSTOM);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Auth gate.
@@ -80,14 +127,38 @@ export default function DashboardPage() {
     return { ok: res.ok, text: await res.text() };
   }, []);
 
+  // Build the discriminated strategy payload the Bot Engine expects. Decimal
+  // fields go as strings (pydantic Decimal accepts them); counts as numbers.
+  const buildStrategy = useCallback((): Record<string, unknown> => {
+    switch (strategyType) {
+      case 'grid':
+        return {
+          strategy_type: 'grid', symbol,
+          lower_price: lowerPrice, upper_price: upperPrice,
+          grid_levels: Number(gridLevels), total_quote: totalQuote,
+        };
+      case 'ma_crossover':
+        return {
+          strategy_type: 'ma_crossover', symbol,
+          fast_period: Number(fastPeriod), slow_period: Number(slowPeriod),
+          position_quote: positionQuote,
+        };
+      case 'custom_rules':
+        return buildCustomRules(symbol, customCfg);
+      case 'dca':
+      default:
+        return { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) };
+    }
+  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote, customCfg]);
+
   const startBot = useCallback(async () => {
     setNotice(null);
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
-      strategy: { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) },
+      strategy: buildStrategy(),
       mode: 'paper',
     });
-    setNotice(r.ok ? `started ${botId}` : `start failed: ${r.text}`);
-  }, [api, botId, symbol, quote, interval]);
+    setNotice(r.ok ? `started ${botId} (${strategyType})` : `start failed: ${r.text}`);
+  }, [api, botId, strategyType, buildStrategy]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -138,14 +209,47 @@ export default function DashboardPage() {
       </p>
 
       <div style={card}>
-        <h3 style={{ marginTop: 0 }}>Start a paper DCA bot</h3>
-        <input style={{ ...input, width: 90 }} value={botId} onChange={(e) => setBotId(e.target.value)} placeholder="bot id" />
-        <input style={{ ...input, width: 110 }} value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="symbol" />
-        <input style={{ ...input, width: 70 }} value={quote} onChange={(e) => setQuote(e.target.value)} placeholder="quote" />
-        <input style={{ ...input, width: 60 }} value={interval} onChange={(e) => setIntervalMin(e.target.value)} placeholder="min" />
-        <button style={btn} onClick={startBot}>Start</button>
-        <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
-        <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
+        <h3 style={{ marginTop: 0 }}>Start a paper bot</h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0 }}>
+          <Field label="bot id"><input style={{ ...input, width: 90 }} value={botId} onChange={(e) => setBotId(e.target.value)} /></Field>
+          <Field label="strategy">
+            <select style={{ ...input, width: 140 }} value={strategyType} onChange={(e) => setStrategyType(e.target.value as StrategyType)}>
+              <option value="dca">DCA</option>
+              <option value="grid">Grid</option>
+              <option value="ma_crossover">MA crossover</option>
+              <option value="custom_rules">Custom rules</option>
+            </select>
+          </Field>
+          <Field label="symbol"><input style={{ ...input, width: 110 }} value={symbol} onChange={(e) => setSymbol(e.target.value)} /></Field>
+
+          {strategyType === 'dca' && (
+            <>
+              <Field label="quote/buy"><input style={{ ...input, width: 70 }} value={quote} onChange={(e) => setQuote(e.target.value)} /></Field>
+              <Field label="interval (min)"><input style={{ ...input, width: 70 }} value={interval} onChange={(e) => setIntervalMin(e.target.value)} /></Field>
+            </>
+          )}
+          {strategyType === 'grid' && (
+            <>
+              <Field label="lower price"><input style={{ ...input, width: 80 }} value={lowerPrice} onChange={(e) => setLowerPrice(e.target.value)} /></Field>
+              <Field label="upper price"><input style={{ ...input, width: 80 }} value={upperPrice} onChange={(e) => setUpperPrice(e.target.value)} /></Field>
+              <Field label="levels"><input style={{ ...input, width: 60 }} value={gridLevels} onChange={(e) => setGridLevels(e.target.value)} /></Field>
+              <Field label="total quote"><input style={{ ...input, width: 80 }} value={totalQuote} onChange={(e) => setTotalQuote(e.target.value)} /></Field>
+            </>
+          )}
+          {strategyType === 'ma_crossover' && (
+            <>
+              <Field label="fast period"><input style={{ ...input, width: 70 }} value={fastPeriod} onChange={(e) => setFastPeriod(e.target.value)} /></Field>
+              <Field label="slow period"><input style={{ ...input, width: 70 }} value={slowPeriod} onChange={(e) => setSlowPeriod(e.target.value)} /></Field>
+              <Field label="position quote"><input style={{ ...input, width: 80 }} value={positionQuote} onChange={(e) => setPositionQuote(e.target.value)} /></Field>
+            </>
+          )}
+        </div>
+        {strategyType === 'custom_rules' && <RuleBuilder cfg={customCfg} setCfg={setCustomCfg} />}
+        <div style={{ marginTop: 12 }}>
+          <button style={btn} onClick={startBot}>Start</button>
+          <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
+          <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
+        </div>
         {notice && <p style={{ marginBottom: 0, color: '#374151', fontSize: 13 }}>{notice}</p>}
       </div>
 
@@ -240,6 +344,167 @@ function PriceChart({ values }: { values: number[] }) {
         <span>high {max.toFixed(2)}</span>
       </div>
     </div>
+  );
+}
+
+// Flatten the builder rows into the rule-engine DSL the Bot Engine validates.
+// A single term emits a bare comparison; multiple terms wrap in and/or.
+function buildCustomRules(symbol: string, cfg: CustomCfg): Record<string, unknown> {
+  const indicators = cfg.indicators.map((i) => {
+    const base: Record<string, unknown> = { name: i.name, fn: i.fn };
+    if (i.fn === 'sma' || i.fn === 'rsi') base.period = Number(i.period);
+    if (i.fn === 'value') base.value = i.value;
+    return base;
+  });
+  const rules = cfg.rules.map((r) => {
+    const terms = r.terms.map((t) => ({ op: t.op, left: t.left, right: t.right }));
+    const when = terms.length === 1 ? terms[0] : { op: r.combinator, terms };
+    const action: Record<string, unknown> = { side: r.side, type: r.type, quote: r.quote };
+    if (r.type === 'limit') action.limit_offset_pct = r.limitOffsetPct;
+    return { when, do: action, cooldown_minutes: Number(r.cooldownMinutes) };
+  });
+  return { strategy_type: 'custom_rules', symbol, indicators, rules };
+}
+
+const subCard: React.CSSProperties = {
+  border: '1px solid #eee', borderRadius: 6, padding: 12, marginBottom: 10, background: '#fafafa',
+};
+const mini: React.CSSProperties = { ...btn, padding: '2px 10px', fontSize: 12 };
+const miniGray: React.CSSProperties = { ...mini, background: '#6b7280', border: 0 };
+const miniDanger: React.CSSProperties = { ...btnDanger, padding: '2px 8px', fontSize: 12 };
+
+// Visual editor for a custom_rules strategy. Supports a flat AND/OR of
+// comparison terms per rule — nested boolean logic is valid in the API but not
+// exposed here yet.
+function RuleBuilder({
+  cfg,
+  setCfg,
+}: {
+  cfg: CustomCfg;
+  setCfg: React.Dispatch<React.SetStateAction<CustomCfg>>;
+}) {
+  const operands = ['price', ...cfg.indicators.map((i) => i.name).filter(Boolean)];
+
+  const setInd = (idx: number, patch: Partial<IndicatorRow>) =>
+    setCfg((c) => ({ ...c, indicators: c.indicators.map((it, i) => (i === idx ? { ...it, ...patch } : it)) }));
+  const addInd = () =>
+    setCfg((c) => ({ ...c, indicators: [...c.indicators, { name: '', fn: 'sma', period: '14', value: '0' }] }));
+  const delInd = (idx: number) =>
+    setCfg((c) => ({ ...c, indicators: c.indicators.filter((_, i) => i !== idx) }));
+
+  const setRule = (idx: number, patch: Partial<RuleRow>) =>
+    setCfg((c) => ({ ...c, rules: c.rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)) }));
+  const addRule = () =>
+    setCfg((c) => ({
+      ...c,
+      rules: [...c.rules, {
+        combinator: 'and', terms: [{ left: 'price', op: '>', right: '0' }],
+        side: 'buy', type: 'market', quote: '100', limitOffsetPct: '', cooldownMinutes: '0',
+      }],
+    }));
+  const delRule = (idx: number) => setCfg((c) => ({ ...c, rules: c.rules.filter((_, i) => i !== idx) }));
+
+  const setTerm = (ri: number, ti: number, patch: Partial<TermRow>) =>
+    setRule(ri, { terms: cfg.rules[ri]!.terms.map((t, i) => (i === ti ? { ...t, ...patch } : t)) });
+  const addTerm = (ri: number) =>
+    setRule(ri, { terms: [...cfg.rules[ri]!.terms, { left: 'price', op: '>', right: '0' }] });
+  const delTerm = (ri: number, ti: number) =>
+    setRule(ri, { terms: cfg.rules[ri]!.terms.filter((_, i) => i !== ti) });
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <datalist id="rb-operands">
+        {operands.map((o) => <option key={o} value={o} />)}
+      </datalist>
+
+      {/* Indicators */}
+      <h4 style={{ margin: '8px 0' }}>Indicators</h4>
+      {cfg.indicators.map((ind, i) => (
+        <div key={i} style={{ ...subCard, display: 'flex', flexWrap: 'wrap', alignItems: 'center' }}>
+          <Field label="name"><input style={{ ...input, width: 90 }} value={ind.name} onChange={(e) => setInd(i, { name: e.target.value })} /></Field>
+          <Field label="fn">
+            <select style={{ ...input, width: 90 }} value={ind.fn} onChange={(e) => setInd(i, { fn: e.target.value as IndFn })}>
+              <option value="sma">SMA</option>
+              <option value="rsi">RSI</option>
+              <option value="price">price</option>
+              <option value="value">value</option>
+            </select>
+          </Field>
+          {(ind.fn === 'sma' || ind.fn === 'rsi') && (
+            <Field label="period"><input style={{ ...input, width: 70 }} value={ind.period} onChange={(e) => setInd(i, { period: e.target.value })} /></Field>
+          )}
+          {ind.fn === 'value' && (
+            <Field label="value"><input style={{ ...input, width: 80 }} value={ind.value} onChange={(e) => setInd(i, { value: e.target.value })} /></Field>
+          )}
+          <button style={{ ...miniDanger, marginBottom: 8 }} onClick={() => delInd(i)}>remove</button>
+        </div>
+      ))}
+      <button style={miniGray} onClick={addInd}>+ indicator</button>
+
+      {/* Rules */}
+      <h4 style={{ margin: '16px 0 8px' }}>Rules</h4>
+      {cfg.rules.map((rule, ri) => (
+        <div key={ri} style={subCard}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <strong style={{ fontSize: 13, marginRight: 12 }}>When</strong>
+            {rule.terms.length > 1 && (
+              <select style={{ ...input, width: 70 }} value={rule.combinator} onChange={(e) => setRule(ri, { combinator: e.target.value as 'and' | 'or' })}>
+                <option value="and">all of</option>
+                <option value="or">any of</option>
+              </select>
+            )}
+            <span style={{ flex: 1 }} />
+            <button style={miniDanger} onClick={() => delRule(ri)}>delete rule</button>
+          </div>
+
+          {rule.terms.map((t, ti) => (
+            <div key={ti} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <input list="rb-operands" style={{ ...input, width: 110, marginRight: 0 }} value={t.left} onChange={(e) => setTerm(ri, ti, { left: e.target.value })} placeholder="left" />
+              <select style={{ ...input, width: 110, marginRight: 0 }} value={t.op} onChange={(e) => setTerm(ri, ti, { op: e.target.value as CompOp })}>
+                {COMP_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
+              </select>
+              <input list="rb-operands" style={{ ...input, width: 110, marginRight: 0 }} value={t.right} onChange={(e) => setTerm(ri, ti, { right: e.target.value })} placeholder="right" />
+              {rule.terms.length > 1 && (
+                <button style={miniDanger} onClick={() => delTerm(ri, ti)}>×</button>
+              )}
+            </div>
+          ))}
+          <button style={{ ...miniGray, marginBottom: 10 }} onClick={() => addTerm(ri)}>+ condition</button>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid #eee', paddingTop: 8 }}>
+            <strong style={{ fontSize: 13, marginRight: 12 }}>Then</strong>
+            <Field label="side">
+              <select style={{ ...input, width: 80 }} value={rule.side} onChange={(e) => setRule(ri, { side: e.target.value as 'buy' | 'sell' })}>
+                <option value="buy">buy</option>
+                <option value="sell">sell</option>
+              </select>
+            </Field>
+            <Field label="type">
+              <select style={{ ...input, width: 90 }} value={rule.type} onChange={(e) => setRule(ri, { type: e.target.value as 'market' | 'limit' })}>
+                <option value="market">market</option>
+                <option value="limit">limit</option>
+              </select>
+            </Field>
+            <Field label="quote"><input style={{ ...input, width: 80 }} value={rule.quote} onChange={(e) => setRule(ri, { quote: e.target.value })} /></Field>
+            {rule.type === 'limit' && (
+              <Field label="limit offset %"><input style={{ ...input, width: 90 }} value={rule.limitOffsetPct} onChange={(e) => setRule(ri, { limitOffsetPct: e.target.value })} /></Field>
+            )}
+            <Field label="cooldown (min)"><input style={{ ...input, width: 90 }} value={rule.cooldownMinutes} onChange={(e) => setRule(ri, { cooldownMinutes: e.target.value })} /></Field>
+          </div>
+        </div>
+      ))}
+      <button style={miniGray} onClick={addRule}>+ rule</button>
+    </div>
+  );
+}
+
+// A labeled form control: tiny caption stacked above its input.
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: 'inline-flex', flexDirection: 'column', marginRight: 8, marginBottom: 8 }}>
+      <span style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>{label}</span>
+      {children}
+    </label>
   );
 }
 
