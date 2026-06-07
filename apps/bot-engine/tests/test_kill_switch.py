@@ -278,7 +278,12 @@ async def test_kill_cancels_resting_orders(
         bars=InfiniteBars(_bar(0, "50000")),
         router=router,
     )
-    await asyncio.sleep(0.02)
+    # Wait for the bot's first bar to place the resting order. Poll instead of a
+    # fixed sleep — a hard-coded delay races the async task and flakes on slow CI.
+    for _ in range(200):
+        if router._open_orders:  # type: ignore[attr-defined]
+            break
+        await asyncio.sleep(0.01)
     assert router._open_orders  # an order is resting  # type: ignore[attr-defined]
 
     await sup.kill("b1")
