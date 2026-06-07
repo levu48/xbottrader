@@ -17,6 +17,10 @@ interface Me {
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
 type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules';
 
+// Mirrors Symbol_ in packages/shared/src/primitives.ts — the gateway rejects
+// anything else with a 400. Crypto pairs only (ccxt venues), e.g. "BTC/USDT".
+const SYMBOL_RE = /^[A-Z0-9]+\/[A-Z0-9]+$/;
+
 // --- Custom rule-engine builder shapes (UI-side; flattened to the DSL on send) -
 type IndFn = 'price' | 'value' | 'sma' | 'rsi';
 type CompOp = '<' | '<=' | '>' | '>=' | '==' | 'crossover' | 'crossunder';
@@ -153,12 +157,16 @@ export default function DashboardPage() {
 
   const startBot = useCallback(async () => {
     setNotice(null);
+    if (!SYMBOL_RE.test(symbol)) {
+      setNotice('Symbol must be BASE/QUOTE, e.g. BTC/USDT (crypto pairs only).');
+      return;
+    }
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
       strategy: buildStrategy(),
       mode: 'paper',
     });
     setNotice(r.ok ? `started ${botId} (${strategyType})` : `start failed: ${r.text}`);
-  }, [api, botId, strategyType, buildStrategy]);
+  }, [api, botId, symbol, strategyType, buildStrategy]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -220,7 +228,14 @@ export default function DashboardPage() {
               <option value="custom_rules">Custom rules</option>
             </select>
           </Field>
-          <Field label="symbol"><input style={{ ...input, width: 110 }} value={symbol} onChange={(e) => setSymbol(e.target.value)} /></Field>
+          <Field label="symbol">
+            <input
+              style={{ ...input, width: 110, borderColor: symbol && !SYMBOL_RE.test(symbol) ? '#dc2626' : '#ccc' }}
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+              placeholder="BTC/USDT"
+            />
+          </Field>
 
           {strategyType === 'dca' && (
             <>
@@ -245,8 +260,13 @@ export default function DashboardPage() {
           )}
         </div>
         {strategyType === 'custom_rules' && <RuleBuilder cfg={customCfg} setCfg={setCustomCfg} />}
+        {symbol && !SYMBOL_RE.test(symbol) && (
+          <p style={{ margin: '8px 0 0', color: '#dc2626', fontSize: 13 }}>
+            Symbol must be <strong>BASE/QUOTE</strong>, e.g. <code>BTC/USDT</code> — crypto pairs only (no stock tickers).
+          </p>
+        )}
         <div style={{ marginTop: 12 }}>
-          <button style={btn} onClick={startBot}>Start</button>
+          <button style={{ ...btn, ...(SYMBOL_RE.test(symbol) ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }} onClick={startBot} disabled={!SYMBOL_RE.test(symbol)}>Start</button>
           <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
           <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
         </div>
