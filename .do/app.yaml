@@ -19,6 +19,19 @@
 name: xbottrader
 region: nyc
 
+# Custom domain. The xbottrader.ai DNS zone is managed by DO (registrar
+# nameservers point at ns[1-3].digitalocean.com), so App Platform auto-creates
+# the apex + www records in that zone and provisions a Let's Encrypt cert.
+# Single-origin: this one domain fronts web (/) and gateway (/v1, /ws) via the
+# ingress rules below — no per-service domains needed.
+domains:
+  - domain: xbottrader.ai
+    type: PRIMARY
+    zone: xbottrader.ai
+  - domain: www.xbottrader.ai
+    type: ALIAS
+    zone: xbottrader.ai
+
 services:
   - name: gateway
     instance_size_slug: basic-xs
