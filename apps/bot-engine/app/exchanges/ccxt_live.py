@@ -134,9 +134,12 @@ def _to_bar(candle: Candle, symbol: str) -> Bar:
 def build_ccxt_client(exchange: str, credentials: ExchangeCredentials) -> Any:
     """Construct an authed ccxt async client. The key lives only in this client.
 
-    For Alpaca, order placement is routed to the *paper* trading endpoint via
-    ``set_sandbox_mode(True)``. Real-money live trading is a deliberate later
-    opt-in, not reachable from this code path yet.
+    Only reached on the live path (paper bots use the PaperExchangeAdapter), so
+    orders placed here are real. For Alpaca the venue id chooses the endpoint:
+    ``alpaca-paper`` routes to ``paper-api.alpaca.markets`` via sandbox mode,
+    while ``alpaca`` hits the live ``api.alpaca.markets`` — so a live Alpaca bot
+    needs a *live* Alpaca API key (paper keys won't authenticate against it).
+    Crypto venues are always live here.
     """
     cls = _exchange_class(exchange)
     config: dict[str, Any] = {
@@ -147,7 +150,7 @@ def build_ccxt_client(exchange: str, credentials: ExchangeCredentials) -> Any:
     if credentials.password:
         config["password"] = credentials.password
     client = cls(config)
-    if _is_alpaca(exchange):
+    if exchange == "alpaca-paper":
         client.set_sandbox_mode(True)  # → paper-api.alpaca.markets
     return client
 

@@ -1,18 +1,26 @@
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify from 'fastify';
+import fastifyRawBody from 'fastify-raw-body';
 import { Redis } from 'ioredis';
+import Stripe from 'stripe';
 import { hostname } from 'node:os';
 
-import { makeRequireUser, resolveUserId } from './auth/middleware.js';
+import { makeRequireSubscription, makeRequireUser, resolveUserId } from './auth/middleware.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { RedisSessionStore } from './auth/sessions.js';
+import { registerBillingRoutes } from './billing/routes.js';
 import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
 import { createDb } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
-import { DrizzleAuditLog, DrizzleKeyStore, DrizzleUserStore } from './db/repos.js';
+import {
+  DrizzleAuditLog,
+  DrizzleKeyStore,
+  DrizzleSubscriptionStore,
+  DrizzleUserStore,
+} from './db/repos.js';
 import { registerKeysRoutes } from './keys/routes.js';
 import { registerAiRoutes } from './routes/ai.js';
 import { registerBotsRoutes } from './routes/bots.js';
@@ -42,28 +50,44 @@ async function main(): Promise<void> {
   const app = Fastify({ logger: { level: 'info' } });
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
+  // Capture the raw body only where opted in (config.rawBody) — the Stripe
+  // webhook needs the exact bytes to verify its signature. All other routes
+  // keep Fastify's default JSON parser.
+  await app.register(fastifyRawBody, { global: false, runFirst: true });
 
   // --- persistence + auth ---
   const db = createDb(databaseUrl);
   const users = new DrizzleUserStore(db);
   const keys = new DrizzleKeyStore(db);
   const audit = new DrizzleAuditLog(db);
+  const subs = new DrizzleSubscriptionStore(db);
   const sessionRedis = new Redis(redisUrl);
   const sessions = new RedisSessionStore(sessionRedis);
   const cipher = EnvelopeCipher.fromEnv();
   const requireUser = makeRequireUser(sessions);
+  const requireSubscription = makeRequireSubscription(subs);
 
   // --- service clients ---
   const signer = InternalAuthSigner.fromEnv();
   const botClient = new BotEngineClient(process.env.BOT_ENGINE_URL ?? 'http://localhost:5001', signer);
   const aiClient = new AiEngineClient(process.env.AI_ENGINE_URL ?? 'http://localhost:5002', signer);
+  const stripe = new Stripe(requireEnv('STRIPE_SECRET_KEY'));
 
   // --- routes ---
   await registerAuthRoutes(app, { users, sessions, audit });
   await registerKeysRoutes(app, { keys, cipher, requireUser });
-  await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users });
+  await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users, subs });
   await registerMarketRoutes(app, { bot: botClient, requireUser });
-  await registerAiRoutes(app, { ai: aiClient, requireUser });
+  await registerAiRoutes(app, { ai: aiClient, requireUser, requireSubscription });
+  await registerBillingRoutes(app, {
+    stripe,
+    subs,
+    users,
+    requireUser,
+    priceId: requireEnv('STRIPE_PRICE_ID'),
+    webhookSecret: requireEnv('STRIPE_WEBHOOK_SECRET'),
+    publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'https://xbottrader.ai',
+  });
 
   app.get('/healthz', async () => ({ ok: true }));
 

@@ -81,6 +81,20 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${DATABASE_URL}   # managed Postgres URI; gateway migrates on boot
+      - key: STRIPE_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${STRIPE_SECRET_KEY}
+      - key: STRIPE_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${STRIPE_WEBHOOK_SECRET}   # from the Stripe webhook → /v1/webhooks/stripe
+      - key: STRIPE_PRICE_ID
+        scope: RUN_TIME
+        value: ${STRIPE_PRICE_ID}         # the recurring subscription price
+      - key: PUBLIC_BASE_URL
+        scope: RUN_TIME
+        value: https://xbottrader.ai      # Checkout success/cancel + portal return
 
   # AI Engine on App Platform (no exchange egress → no Reserved-IP constraint).
   # Internal-only: the gateway reaches it via ${ai-engine.PRIVATE_URL}; it is not

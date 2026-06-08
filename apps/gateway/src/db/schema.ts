@@ -34,5 +34,22 @@ export const auditLogAuth = pgTable('audit_log_auth', {
   ts: timestamp('ts', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// One row per user. Synced from Stripe via the billing webhook; the source of
+// truth for entitlement (status ∈ {active, trialing} unlocks live + AI). The
+// stripeCustomerId is set on first checkout and reused thereafter.
+export const subscriptions = pgTable('subscriptions', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  stripeCustomerId: text('stripe_customer_id').notNull().unique(),
+  stripeSubscriptionId: text('stripe_subscription_id'),
+  status: text('status'), // Stripe sub status: active | trialing | past_due | canceled | ...
+  priceId: text('price_id'),
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type ApiKeyRow = typeof apiKeysCiphertext.$inferSelect;
+export type SubscriptionRow = typeof subscriptions.$inferSelect;

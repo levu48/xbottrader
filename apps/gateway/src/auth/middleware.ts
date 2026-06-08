@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { SubscriptionStore } from '../db/repos.js';
 import type { SessionStore } from './sessions.js';
 
 declare module 'fastify' {
@@ -44,3 +45,19 @@ export function makeRequireUser(sessions: SessionStore) {
 }
 
 export type RequireUser = ReturnType<typeof makeRequireUser>;
+
+/**
+ * preHandler that 403s unless the user has an active subscription. Must run
+ * after requireUser (it reads req.userId). Used to gate live trading + the LLM
+ * AI features behind the paid plan.
+ */
+export function makeRequireSubscription(subs: SubscriptionStore) {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!req.userId || !(await subs.isActive(req.userId))) {
+      await reply.status(403).send({ error: 'subscription_required' });
+      return;
+    }
+  };
+}
+
+export type RequireSubscription = ReturnType<typeof makeRequireSubscription>;

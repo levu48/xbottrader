@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { RequireUser } from '../auth/middleware.js';
 import { BotEngineClient } from '../clients/bot.js';
 import { InternalAuthSigner } from '../clients/internal-auth.js';
-import type { KeyStore, UserStore } from '../db/repos.js';
+import type { KeyStore, SubscriptionStore, UserStore } from '../db/repos.js';
 import { registerBotsRoutes } from './bots.js';
 
 // Dev auth stand-in: maps x-dev-user → req.userId so route tests stay focused on
@@ -28,6 +28,14 @@ const makeKeys = (envelope: unknown = null): KeyStore => ({
   remove: async () => {},
 });
 
+const makeSubs = (active = true): SubscriptionStore => ({
+  getByUser: async () => null,
+  getByCustomerId: async () => null,
+  ensureCustomer: async () => {},
+  upsertFromStripe: async () => {},
+  isActive: async () => active,
+});
+
 const makeClient = (
   responder: (path: string, init: { body?: string }) => { status: number; body: string },
 ): BotEngineClient =>
@@ -39,13 +47,16 @@ const makeClient = (
 function reg(
   app: FastifyInstance,
   client: BotEngineClient,
-  opts: { users?: UserStore; keys?: KeyStore } = {},
+  opts: { users?: UserStore; keys?: KeyStore; subs?: SubscriptionStore } = {},
 ): Promise<void> {
   return registerBotsRoutes(app, {
     bot: client,
     requireUser: devRequireUser,
     users: opts.users ?? makeUsers(),
     keys: opts.keys ?? makeKeys(),
+    // Default to an active subscription so live/ai_signal tests exercise the
+    // 2FA/key logic; the entitlement gate is tested explicitly below.
+    subs: opts.subs ?? makeSubs(true),
   });
 }
 
@@ -156,6 +167,50 @@ describe('bots routes', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(seen[0]!.body).credentials).toEqual(envelope);
+    await app.close();
+  });
+
+  it('blocks a live start without an active subscription', async () => {
+    const app = Fastify();
+    await reg(app, makeClient(() => ({ status: 200, body: '{}' })), {
+      users: makeUsers(true),
+      keys: makeKeys({ v: 1 }),
+      subs: makeSubs(false),
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bots/b1/start',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: {
+        strategy: { strategy_type: 'dca', symbol: 'BTC/USDT', quote_amount: '100', interval_minutes: 60 },
+        mode: 'live',
+        exchange: 'binance',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error).toBe('subscription_required');
+    await app.close();
+  });
+
+  it('blocks a paper ai_signal start without an active subscription', async () => {
+    const app = Fastify();
+    await reg(app, makeClient(() => ({ status: 200, body: '{}' })), { subs: makeSubs(false) });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/bots/b1/start',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: {
+        strategy: {
+          strategy_type: 'ai_signal',
+          symbol: 'BTC/USDT',
+          quote_amount: '50',
+          decision_interval_minutes: 15,
+        },
+        mode: 'paper',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error).toBe('subscription_required');
     await app.close();
   });
 
