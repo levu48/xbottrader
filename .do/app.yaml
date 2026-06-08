@@ -13,8 +13,11 @@
 #   github.repo            → "your-user/xbottrader"
 #   github.branch          → "main"
 #   region                 → your preferred region (nyc, sfo, fra, …)
-#   ${SECRETS}             → set via `doctl apps update --secret KEY=VAL`
-#                             OR the App Platform UI (encrypted at rest)
+#   ${SECRETS}             → set the actual values in the App Platform UI as
+#                             encrypted env vars (recommended), OR fill the SECRET
+#                             `value:` fields in an untracked copy of this spec and
+#                             `doctl apps update <APP_ID> --spec <copy>`. doctl has
+#                             no `-e`/`--secret` flag — secrets flow via the spec/UI.
 
 name: xbottrader
 region: nyc
@@ -112,6 +115,18 @@ services:
       - key: XBT_BACKTEST_EXCHANGE
         scope: RUN_TIME
         value: kraken
+      # Alpaca market-data key for equity backtests (the AI engine fetches OHLCV
+      # via ccxt's alpaca module, which requires auth even for "public" bars).
+      # Set the actual values as encrypted env vars in the App Platform UI on the
+      # ai-engine component; paper data keys are fine.
+      - key: XBT_ALPACA_DATA_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${XBT_ALPACA_DATA_KEY}
+      - key: XBT_ALPACA_DATA_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: ${XBT_ALPACA_DATA_SECRET}
 
   - name: web
     instance_size_slug: basic-xxs

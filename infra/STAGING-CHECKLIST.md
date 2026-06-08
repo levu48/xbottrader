@@ -28,7 +28,10 @@ Full step-by-step commands live in [README.md](README.md); this is the gate list
 ## App Platform (Gateway + Web + AI Engine)
 - [ ] `doctl apps create --spec .do/app.yaml` → save `APP_ID`.
 - [ ] Set secrets: `XBT_KEK`, `GATEWAY_INTERNAL_HMAC_SECRET`, `ANTHROPIC_API_KEY`,
-      `REDIS_URL` (via `doctl apps update --spec … -e KEY=VAL` or the UI).
+      `REDIS_URL`, `XBT_ALPACA_DATA_KEY`/`XBT_ALPACA_DATA_SECRET` (in the App
+      Platform UI as encrypted env vars, or by filling the SECRET `value:` fields
+      in an untracked copy of the spec and `doctl apps update --spec <copy>` —
+      there is no `-e` flag).
 - [ ] `AI_ENGINE_URL` resolves automatically via `${ai-engine.PRIVATE_URL}` — no
       manual value needed. `BOT_ENGINE_URL` is filled after the Droplet step.
 - [ ] Verify `GET https://gateway-xxxx.ondigitalocean.app/healthz` → `{"ok":true}`.

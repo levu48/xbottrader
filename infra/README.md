@@ -38,16 +38,26 @@ doctl apps create --spec .do/app.yaml
 # → returns an APP_ID; save it.
 ```
 
-Set the secrets and resolved URLs (substitute the values you generated /
-got from the previous step's output):
+Set the secrets and resolved URLs. `doctl apps update` has **no `-e` flag** —
+App Platform env vars/secrets are applied through the spec or the UI. Two ways:
+
+**UI (simplest for secrets):** in the App Platform console, open each component
+(gateway / ai-engine) → Settings → Environment Variables → add the values and
+check **Encrypt**. Save to redeploy.
+
+**CLI (no plaintext in git):** apply from an *untracked* copy of the spec so the
+real values never get committed:
 
 ```bash
 APP_ID=<from above>
-doctl apps update "$APP_ID" --spec .do/app.yaml \
-  -e XBT_KEK="$XBT_KEK" \
-  -e GATEWAY_INTERNAL_HMAC_SECRET="$GATEWAY_INTERNAL_HMAC_SECRET" \
-  -e REDIS_URL="<DO Managed Caching URL or leave for later>" \
-  -e BOT_ENGINE_URL="http://<RESERVED_IP>:5001"  # filled in after step 2
+cp .do/app.yaml /tmp/app.run.yaml
+# Edit /tmp/app.run.yaml and fill in the SECRET `value:` fields (XBT_KEK,
+# GATEWAY_INTERNAL_HMAC_SECRET, DATABASE_URL, REDIS_URL, ANTHROPIC_API_KEY,
+# XBT_ALPACA_DATA_KEY/SECRET) and the URL placeholders (BOT_ENGINE_URL →
+# http://<RESERVED_IP>:5001, filled in after step 2). DO encrypts SECRET values
+# server-side on apply.
+doctl apps update "$APP_ID" --spec /tmp/app.run.yaml
+rm /tmp/app.run.yaml
 ```
 
 `REDIS_URL` is required by the Gateway at boot. For first deploy you can
@@ -109,11 +119,15 @@ curl http://"$RESERVED_IP":5001/healthz
 # → {"ok":true}
 ```
 
-Then update the Gateway app with the Bot Engine URL:
+Then set the Gateway's `BOT_ENGINE_URL` to `http://$RESERVED_IP:5001` — either in
+the App Platform UI (gateway component → Environment Variables) or by editing the
+untracked spec copy and re-applying:
 
 ```bash
-doctl apps update "$APP_ID" --spec .do/app.yaml \
-  -e BOT_ENGINE_URL="http://$RESERVED_IP:5001"
+cp .do/app.yaml /tmp/app.run.yaml
+# set BOT_ENGINE_URL's value to http://<RESERVED_IP>:5001 in /tmp/app.run.yaml
+doctl apps update "$APP_ID" --spec /tmp/app.run.yaml
+rm /tmp/app.run.yaml
 ```
 
 ---
