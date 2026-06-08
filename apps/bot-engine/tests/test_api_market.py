@@ -224,6 +224,8 @@ def test_alpaca_stock_bars_parses_response(monkeypatch: Any) -> None:
     assert captured["url"].endswith("/v2/stocks/AAPL/bars")
     assert captured["params"]["timeframe"] == "1Min"
     assert captured["params"]["sort"] == "desc"
+    # An explicit start window is sent (avoids Alpaca's empty-on-weekend default).
+    assert captured["params"]["start"].endswith("Z")
     assert captured["headers"]["APCA-API-KEY-ID"] == "k"
     # Returned oldest-first: first candle is the 20:00 bar [ts_ms, o, h, l, c, v].
     assert candles[0] == [1_699_992_000_000.0, 190.0, 191.0, 189.5, 190.5, 1000.0]

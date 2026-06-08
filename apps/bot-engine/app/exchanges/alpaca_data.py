@@ -14,7 +14,7 @@ and marks. Never log the keys.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -24,6 +24,11 @@ _DATA_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/bars"
 # Our timeframe ids → Alpaca's. Only these are exposed by the dashboard selector
 # and used by the live feed.
 _ALPACA_TIMEFRAMES = {"1m": "1Min", "5m": "5Min", "1h": "1Hour", "1d": "1Day"}
+
+# Approximate closed-bars per regular trading day (6.5h session), per timeframe.
+# Used to size the lookback window so a ``limit``-sized request reaches back far
+# enough to actually contain ``limit`` bars.
+_BARS_PER_TRADING_DAY = {"1m": 390, "5m": 78, "1h": 7, "1d": 1}
 
 
 class EquityDataError(RuntimeError):
@@ -58,6 +63,23 @@ def _iso_to_ms(t: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def _lookback_start(timeframe: str, limit: int) -> str:
+    """RFC-3339 ``start`` far enough back to hold ``limit`` bars.
+
+    Alpaca's stock bars endpoint defaults ``start`` to the beginning of the
+    current day when omitted, so a request made on a weekend / before the open /
+    after hours comes back empty. We instead reach back a calendar window sized
+    from the timeframe and ``limit``, padded for weekends and holidays; combined
+    with ``sort=desc`` + ``limit`` this yields the most recent ``limit`` bars.
+    """
+    per_day = _BARS_PER_TRADING_DAY[timeframe]
+    trading_days = max(1, -(-limit // per_day))  # ceil(limit / per_day)
+    # ~7 calendar days per 5 trading days, plus a buffer for holiday stretches.
+    calendar_days = int(trading_days * 1.4) + 5
+    start = datetime.now(timezone.utc) - timedelta(days=calendar_days)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _parse_bars(payload: dict[str, Any]) -> list[list[float]]:
     """Alpaca bars JSON → ccxt-style rows ``[ts_ms, o, h, l, c, v]``."""
     bars = payload.get("bars") or []
@@ -86,7 +108,15 @@ async def _request_bars(
     """
     tf = _alpaca_timeframe(timeframe)
     key, secret = _alpaca_credentials()
-    params = {"timeframe": tf, "limit": limit, "feed": "iex", "sort": "desc"}
+    # Explicit start window (end defaults to now) so we don't fall into Alpaca's
+    # "default start = today" → empty-on-weekends trap.
+    params = {
+        "timeframe": tf,
+        "limit": limit,
+        "feed": "iex",
+        "sort": "desc",
+        "start": _lookback_start(timeframe, limit),
+    }
     headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
     try:
         resp = await client.get(
