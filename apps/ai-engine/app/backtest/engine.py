@@ -39,6 +39,10 @@ async def run_backtest(
     starting_cash: Decimal,
     paper_config: PaperConfig | None = None,
 ) -> BacktestResult:
+    # ai_signal decisions come from a live LLM, so a backtest can't replay them
+    # deterministically — reject it rather than silently producing a no-op curve.
+    if getattr(strategy_config, "strategy_type", None) == "ai_signal":
+        raise ValueError("ai_signal strategies are not backtestable (live LLM decisions)")
     strategy = build_strategy(strategy_config)
     adapter = PaperExchangeAdapter(config=paper_config or PaperConfig())
     state = StrategyState()
