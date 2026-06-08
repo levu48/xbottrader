@@ -124,6 +124,10 @@ export default function DashboardPage() {
   const [aiLookback, setAiLookback] = useState('50');
   const [aiGuidance, setAiGuidance] = useState('');
   const [aiModel, setAiModel] = useState('');
+  // AI strategy author (NL -> custom_rules): describe it, AI fills the RuleBuilder.
+  const [authorDesc, setAuthorDesc] = useState('');
+  const [authoring, setAuthoring] = useState(false);
+  const [authorNote, setAuthorNote] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Auth gate.
@@ -209,6 +213,40 @@ export default function DashboardPage() {
     });
     setNotice(r.ok ? `started ${botId} (${strategyType} on ${exchange})` : `start failed: ${r.text}`);
   }, [api, botId, exchange, symbol, strategyType, buildStrategy]);
+
+  // Ask the AI Engine to author a custom_rules strategy from a plain-English
+  // description, then load it into the RuleBuilder so the user can review/edit
+  // before starting — nothing trades until they hit Start.
+  const generateRules = useCallback(async () => {
+    setAuthorNote(null);
+    if (!authorDesc.trim()) {
+      setAuthorNote('Describe the strategy first.');
+      return;
+    }
+    if (!symbolValid(exchange, symbol)) {
+      setAuthorNote(`Symbol must be ${symbolHint(exchange)}.`);
+      return;
+    }
+    setAuthoring(true);
+    const r = await api('/v1/ai/strategy/author', {
+      description: authorDesc.trim(),
+      symbol,
+      exchange,
+    });
+    setAuthoring(false);
+    if (!r.ok) {
+      setAuthorNote(`Generate failed: ${r.text}`);
+      return;
+    }
+    try {
+      const data = JSON.parse(r.text) as { strategy: AuthoredStrategy; explanation: string };
+      const { cfg, warnings } = authoredToCustomCfg(data.strategy);
+      setCustomCfg(cfg);
+      setAuthorNote([data.explanation, ...warnings].filter(Boolean).join(' '));
+    } catch {
+      setAuthorNote('Could not parse the generated strategy.');
+    }
+  }, [api, authorDesc, exchange, symbol]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -334,6 +372,32 @@ export default function DashboardPage() {
               placeholder="Plain-English directive for the model, e.g. &quot;Only buy on strong upward momentum; stay in cash otherwise.&quot;"
             />
           </Field>
+        )}
+        {strategyType === 'custom_rules' && (
+          <div style={{ marginTop: 12 }}>
+            <Field label="describe a strategy — AI writes the rules (optional)">
+              <textarea
+                style={{ ...input, width: '100%', maxWidth: 640, minHeight: 56, resize: 'vertical', marginRight: 0 }}
+                value={authorDesc}
+                onChange={(e) => setAuthorDesc(e.target.value)}
+                maxLength={4000}
+                placeholder='e.g. "Buy $100 when RSI(14) drops below 30; sell when it crosses above 70."'
+              />
+            </Field>
+            <button
+              style={{ ...btn, ...(authoring ? { opacity: 0.6, cursor: 'wait' } : {}) }}
+              onClick={generateRules}
+              disabled={authoring}
+            >
+              {authoring ? 'Generating…' : 'Generate rules'}
+            </button>
+            {authorNote && (
+              <p style={{ margin: '8px 0 0', color: '#374151', fontSize: 13 }}>{authorNote}</p>
+            )}
+            <p style={{ margin: '8px 0 0', color: '#6b7280', fontSize: 12 }}>
+              Generated rules load into the editor below — review and edit them before starting.
+            </p>
+          </div>
         )}
         {strategyType === 'custom_rules' && <RuleBuilder cfg={customCfg} setCfg={setCustomCfg} />}
         {symbol && !symbolValid(exchange, symbol) && (
@@ -599,6 +663,78 @@ function buildCustomRules(symbol: string, cfg: CustomCfg): Record<string, unknow
     return { when, do: action, cooldown_minutes: Number(r.cooldownMinutes) };
   });
   return { strategy_type: 'custom_rules', symbol, indicators, rules };
+}
+
+// The AI-authored custom_rules config the AI Engine returns (a subset of the
+// rule-engine DSL; see packages/shared CustomRulesStrategy).
+interface AuthoredCond { op: string; left?: string; right?: string; terms?: AuthoredCond[] }
+interface AuthoredStrategy {
+  strategy_type: 'custom_rules';
+  symbol: string;
+  indicators?: { name: string; fn: string; period?: number; value?: string }[];
+  rules: {
+    when: AuthoredCond;
+    do: { side?: string; type?: string; quote?: string; limit_offset_pct?: string };
+    cooldown_minutes?: number;
+  }[];
+}
+
+// Reverse of buildCustomRules: turn an authored config into RuleBuilder state so
+// the user can review/edit it. The visual builder only models a flat AND/OR of
+// comparisons, so nested boolean logic / NOT is flattened to its leaf
+// comparisons and flagged in `warnings` — the user should review those rules.
+function authoredToCustomCfg(s: AuthoredStrategy): { cfg: CustomCfg; warnings: string[] } {
+  const warnings: string[] = [];
+  const indicators: IndicatorRow[] = (s.indicators ?? []).map((i) => ({
+    name: i.name,
+    fn: (['price', 'value', 'sma', 'rsi'].includes(i.fn) ? i.fn : 'value') as IndFn,
+    period: String(i.period ?? 0),
+    value: i.value != null ? String(i.value) : '0',
+  }));
+
+  const isCmp = (c: AuthoredCond): boolean =>
+    COMP_OPS.includes(c.op as CompOp) && c.left != null && c.right != null;
+  const leaves = (c: AuthoredCond): TermRow[] => {
+    if (isCmp(c)) return [{ left: c.left!, op: c.op as CompOp, right: c.right! }];
+    if (Array.isArray(c.terms)) return c.terms.flatMap(leaves);
+    return [];
+  };
+
+  const rules: RuleRow[] = s.rules.map((r, idx) => {
+    const w = r.when;
+    let combinator: 'and' | 'or' = 'and';
+    let terms: TermRow[];
+    if (isCmp(w)) {
+      terms = [{ left: w.left!, op: w.op as CompOp, right: w.right! }];
+    } else if ((w.op === 'and' || w.op === 'or') && Array.isArray(w.terms)) {
+      combinator = w.op;
+      if (w.terms.every(isCmp)) {
+        terms = w.terms.map((t) => ({ left: t.left!, op: t.op as CompOp, right: t.right! }));
+      } else {
+        terms = leaves(w);
+        warnings.push(`Rule ${idx + 1} used nested logic the editor can't fully show — review it.`);
+      }
+    } else {
+      terms = leaves(w);
+      warnings.push(`Rule ${idx + 1} used "${w.op ?? '?'}" logic the editor can't represent — review it.`);
+    }
+    if (terms.length === 0) {
+      terms = [{ left: 'price', op: '>', right: '0' }];
+      warnings.push(`Rule ${idx + 1} had no readable condition — added a placeholder.`);
+    }
+    const d = r.do;
+    return {
+      combinator,
+      terms,
+      side: (d.side === 'sell' ? 'sell' : 'buy') as 'buy' | 'sell',
+      type: (d.type === 'limit' ? 'limit' : 'market') as 'market' | 'limit',
+      quote: String(d.quote ?? '0'),
+      limitOffsetPct: d.limit_offset_pct != null ? String(d.limit_offset_pct) : '',
+      cooldownMinutes: String(r.cooldown_minutes ?? 0),
+    };
+  });
+
+  return { cfg: { indicators, rules }, warnings };
 }
 
 const subCard: React.CSSProperties = {

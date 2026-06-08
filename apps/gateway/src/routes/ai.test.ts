@@ -80,6 +80,71 @@ describe('ai routes', () => {
     await app.close();
   });
 
+  it('forwards a strategy-author request and returns the generated config', async () => {
+    const seen: { path: string; body: string }[] = [];
+    const client = makeClient((path, init) => {
+      seen.push({ path, body: init.body ?? '' });
+      return {
+        status: 200,
+        body: JSON.stringify({
+          strategy: {
+            strategy_type: 'custom_rules',
+            symbol: 'BTC/USDT',
+            indicators: [{ name: 'rsi', fn: 'rsi', period: 14 }],
+            rules: [{ when: { op: '<', left: 'rsi', right: '30' }, do: { side: 'buy', type: 'market', quote: '100' }, cooldown_minutes: 0 }],
+          },
+          explanation: 'Buy when RSI(14) drops below 30.',
+          usage: {},
+        }),
+      };
+    });
+    const app = Fastify();
+    await reg(app, client);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/ai/strategy/author',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: { description: 'buy oversold RSI', symbol: 'BTC/USDT', exchange: 'binance' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).strategy.strategy_type).toBe('custom_rules');
+    expect(JSON.parse(res.body).explanation).toMatch(/RSI/);
+    expect(seen[0]!.path).toBe('/strategy/author');
+    expect(JSON.parse(seen[0]!.body).description).toBe('buy oversold RSI');
+    await app.close();
+  });
+
+  it('returns 400 on an invalid author body', async () => {
+    const client = makeClient(() => ({ status: 200, body: '{}' }));
+    const app = Fastify();
+    await reg(app, client);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/ai/strategy/author',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: { symbol: 'BTC/USDT' }, // missing description
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('propagates an upstream 422 from the author (unparseable description)', async () => {
+    const client = makeClient(() => ({ status: 422, body: 'could not author a strategy' }));
+    const app = Fastify();
+    await reg(app, client);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/ai/strategy/author',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: { description: 'gibberish', symbol: 'BTC/USDT' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).upstream).toBe('could not author a strategy');
+    await app.close();
+  });
+
   it('rejects requests without an authenticated user', async () => {
     const client = makeClient(() => ({ status: 200, body: '{}' }));
     const app = Fastify();

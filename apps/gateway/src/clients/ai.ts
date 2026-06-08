@@ -24,6 +24,13 @@ export const BacktestRequest = z.object({
 });
 export type BacktestRequest = z.infer<typeof BacktestRequest>;
 
+export const AuthorStrategyRequest = z.object({
+  description: z.string().min(1).max(4000),
+  symbol: z.string().min(1),
+  exchange: z.string().optional(),
+});
+export type AuthorStrategyRequest = z.infer<typeof AuthorStrategyRequest>;
+
 export class AiEngineError extends Error {
   constructor(
     public readonly status: number,
@@ -46,6 +53,10 @@ export class AiEngineClient {
 
   async backtest(args: { userId: string; body: BacktestRequest }): Promise<unknown> {
     return this.#post('/backtest/run', args.userId, args.body);
+  }
+
+  async author(args: { userId: string; body: AuthorStrategyRequest }): Promise<unknown> {
+    return this.#post('/strategy/author', args.userId, args.body);
   }
 
   async #post(path: string, userId: string, body: unknown): Promise<unknown> {
