@@ -108,6 +108,13 @@ RESERVED_IP=<from previous output>
 ssh root@"$RESERVED_IP" tee /etc/xbt/bot-engine.env >/dev/null <<EOF
 GATEWAY_INTERNAL_HMAC_SECRET=$GATEWAY_INTERNAL_HMAC_SECRET
 XBT_KEK=$XBT_KEK
+# Equities only: needed for the dashboard OHLCV chart and the live equity bar
+# feed (the Bot Engine fetches AAPL bars from Alpaca's data API). Crypto needs
+# no keys. NOTE: setting these on App Platform does NOT reach the Bot Engine —
+# in .do/app.yaml they're only on the ai-engine service (backtests). The Bot
+# Engine reads them only from this file.
+XBT_ALPACA_DATA_KEY=$XBT_ALPACA_DATA_KEY
+XBT_ALPACA_DATA_SECRET=$XBT_ALPACA_DATA_SECRET
 EOF
 ssh root@"$RESERVED_IP" systemctl restart xbt-bot-engine
 ```
