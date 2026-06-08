@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .ai_signal import AiSignalParams, AiSignalStrategy
 from .base import Strategy
 from .dca import DcaParams, DcaStrategy
 from .grid import GridParams, GridStrategy
@@ -54,4 +55,17 @@ def build_strategy(config: StrategyConfigLike | Any) -> Strategy:
         # Nested config (indicators/rules) is normalized from the duck-typed
         # object inside from_config — works for pydantic, dataclass, or dict.
         return RuleEngineStrategy(RuleEngineParams.from_config(config))
+    if config.strategy_type == "ai_signal":
+        # The pure strategy only reads decisions from state; the LLM client that
+        # produces them is wired by the launcher's companion task, not here.
+        return AiSignalStrategy(
+            AiSignalParams(
+                symbol=config.symbol,
+                quote_amount=config.quote_amount,
+                decision_interval_minutes=config.decision_interval_minutes,
+                lookback_bars=getattr(config, "lookback_bars", 50),
+                guidance=getattr(config, "guidance", None),
+                model=getattr(config, "model", None),
+            )
+        )
     raise ValueError(f"unknown strategy_type: {config.strategy_type!r}")

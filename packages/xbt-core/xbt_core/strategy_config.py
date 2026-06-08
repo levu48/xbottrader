@@ -157,7 +157,25 @@ def _referenced_tokens(cond: Condition) -> set[str]:
     return {t for t in (cond.left, cond.right) if t is not None}
 
 
+# --------------------------------------------------------------------------- #
+# AI-signal strategy (LLM in the loop).
+# Unlike the others, this strategy is NOT deterministic: a companion task in the
+# Bot Engine periodically asks the AI Engine for a buy/sell/hold decision and
+# writes it into strategy state, which on_bar then acts on. The config only
+# carries the knobs — sizing (quote_amount) stays here so the model never sizes
+# trades. Deliberately not backtestable (the AI Engine rejects it).
+# --------------------------------------------------------------------------- #
+class AiSignalParams(BaseModel):
+    strategy_type: Literal["ai_signal"]
+    symbol: str = Field(min_length=1)
+    quote_amount: Decimal = Field(gt=0)  # notional to spend per buy decision
+    decision_interval_minutes: int = Field(ge=1)  # how often to consult the model
+    lookback_bars: int = Field(default=50, ge=2, le=500)  # recent closes sent to the model
+    guidance: str | None = Field(default=None, max_length=2000)  # user's plain-English directive
+    model: str | None = None  # optional model override (defaults server-side)
+
+
 StrategyConfig = Annotated[
-    Union[DcaParams, GridParams, MaCrossoverParams, CustomRulesParams],
+    Union[DcaParams, GridParams, MaCrossoverParams, CustomRulesParams, AiSignalParams],
     Field(discriminator="strategy_type"),
 ]

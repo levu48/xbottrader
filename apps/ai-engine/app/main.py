@@ -12,7 +12,9 @@ from xbt_core.internal_auth import InternalAuthenticator
 
 from .api.routes import router as ai_router
 from .backtest.engine import Backtester
+from .llm.author import StrategyAuthor
 from .llm.copilot import Copilot
+from .llm.signal import SignalAdvisor
 
 
 def create_app(
@@ -20,11 +22,15 @@ def create_app(
     internal_auth: InternalAuthenticator,
     copilot: Copilot,
     backtester: Backtester,
+    author: StrategyAuthor,
+    signal_advisor: SignalAdvisor,
 ) -> FastAPI:
     app = FastAPI(title="xbt-ai-engine")
     app.state.internal_auth = internal_auth
     app.state.copilot = copilot
     app.state.backtester = backtester
+    app.state.author = author
+    app.state.signal_advisor = signal_advisor
     app.include_router(ai_router)
 
     @app.get("/healthz")

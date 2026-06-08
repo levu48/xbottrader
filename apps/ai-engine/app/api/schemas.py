@@ -48,6 +48,47 @@ class CopilotChatResponse(BaseModel):
     usage: dict[str, int] = Field(default_factory=dict)
 
 
+# ----- strategy author (NL -> custom_rules) -----
+
+
+class AuthorStrategyRequest(BaseModel):
+    description: str = Field(min_length=1, max_length=4000)
+    symbol: str = Field(min_length=1)
+    exchange: str = "binance"
+
+    @model_validator(mode="after")
+    def _symbol_matches_asset_class(self) -> "AuthorStrategyRequest":
+        if asset_class_for(self.exchange) is AssetClass.US_EQUITY:
+            if not _EQUITY_SYMBOL_RE.match(self.symbol):
+                raise ValueError(f"{self.symbol!r} is not a valid equity ticker (e.g. AAPL)")
+        elif not _CRYPTO_SYMBOL_RE.match(self.symbol):
+            raise ValueError(f"{self.symbol!r} is not a valid crypto pair (e.g. BTC/USDT)")
+        return self
+
+
+class AuthorStrategyResponse(BaseModel):
+    strategy: CustomRulesParams
+    explanation: str
+    usage: dict[str, int] = Field(default_factory=dict)
+
+
+# ----- live signal (ai_signal strategy decision) -----
+
+
+class SignalRequest(BaseModel):
+    symbol: str = Field(min_length=1)
+    closes: list[Decimal] = Field(min_length=1, max_length=500)
+    position: Decimal = Decimal(0)
+    guidance: str | None = Field(default=None, max_length=2000)
+    model: str | None = None
+
+
+class SignalResponse(BaseModel):
+    action: Literal["buy", "sell", "hold"]
+    reason: str
+    usage: dict[str, int] = Field(default_factory=dict)
+
+
 # ----- backtest -----
 
 
