@@ -37,7 +37,14 @@ async def test_signs_request_and_parses_decision() -> None:
             body=body,
         )
         seen["user"] = ident.user_id
-        return httpx.Response(200, json={"action": "buy", "reason": "momentum up", "usage": {}})
+        return httpx.Response(
+            200,
+            json={
+                "action": "buy",
+                "reason": "momentum up",
+                "usage": {"input_tokens": 90, "output_tokens": 7},
+            },
+        )
 
     client = _client(httpx.MockTransport(handle))
     decision = await client.signal(
@@ -51,6 +58,7 @@ async def test_signs_request_and_parses_decision() -> None:
 
     assert decision.action == "buy"
     assert decision.reason == "momentum up"
+    assert decision.usage == {"input_tokens": 90, "output_tokens": 7}
     assert seen["path"] == "/strategy/signal"
     assert seen["user"] == "u1"
     # Decimals serialized as strings; model omitted because it was None.

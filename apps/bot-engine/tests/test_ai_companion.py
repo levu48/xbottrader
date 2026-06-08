@@ -15,9 +15,12 @@ from app.runtime.ai_companion import AiSignalCompanion, build_ai_companion
 
 
 class FakeClient:
-    def __init__(self, decision: SignalDecision | Exception) -> None:
+    def __init__(
+        self, decision: SignalDecision | Exception, *, max_daily_consults: int | None = None
+    ) -> None:
         self.calls: list[dict[str, object]] = []
         self._decision = decision
+        self.max_daily_consults = max_daily_consults  # build_ai_companion reads this
 
     async def signal(self, **kwargs: object) -> SignalDecision:
         self.calls.append(kwargs)
@@ -34,7 +37,12 @@ class FakePublisher:
         self.events.append(event)
 
 
-def _companion(client: FakeClient, publisher: FakePublisher | None = None) -> AiSignalCompanion:
+def _companion(
+    client: FakeClient,
+    publisher: FakePublisher | None = None,
+    *,
+    max_daily_consults: int | None = None,
+) -> AiSignalCompanion:
     return AiSignalCompanion(
         client=client,
         user_id="u1",
@@ -44,6 +52,7 @@ def _companion(client: FakeClient, publisher: FakePublisher | None = None) -> Ai
         guidance="hold the line",
         model=None,
         publisher=publisher,
+        max_daily_consults=max_daily_consults,
     )
 
 
@@ -108,6 +117,74 @@ async def test_failed_consult_does_not_crash(monkeypatch: pytest.MonkeyPatch) ->
 
     assert len(client.calls) == 2  # tried both ticks
     assert SIGNAL_SLOT not in state.custom  # no verdict written on failure
+
+
+@pytest.mark.asyncio
+async def test_emits_usage_in_decision_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeClient(
+        SignalDecision(action="buy", reason="r", usage={"input_tokens": 120, "output_tokens": 8})
+    )
+    publisher = FakePublisher()
+    state = StrategyState()
+    state.custom[WINDOW_SLOT] = [Decimal("1"), Decimal("2")]
+
+    _stub_sleep(monkeypatch, ticks=1)
+    with pytest.raises(asyncio.CancelledError):
+        await _companion(client, publisher).run(state)
+
+    event = publisher.events[0]
+    assert event.event_type == "ai_decision"  # type: ignore[attr-defined]
+    assert event.payload["usage"] == {"input_tokens": 120, "output_tokens": 8}  # type: ignore[attr-defined]
+    assert event.payload["consults_today"] == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_pauses_consults_and_flags_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pin a single UTC day so the cap doesn't reset mid-test.
+    import datetime as _dt
+
+    monkeypatch.setattr("app.runtime.ai_companion._utc_date", lambda: _dt.date(2026, 6, 8))
+    client = FakeClient(SignalDecision(action="buy", reason="r"))
+    publisher = FakePublisher()
+    state = StrategyState()
+    state.custom[WINDOW_SLOT] = [Decimal("1"), Decimal("2")]
+
+    # Cap of 2: ticks 1-2 consult, ticks 3-4 are capped (one flag event total).
+    _stub_sleep(monkeypatch, ticks=4)
+    with pytest.raises(asyncio.CancelledError):
+        await _companion(client, publisher, max_daily_consults=2).run(state)
+
+    assert len(client.calls) == 2  # never exceeded the cap
+    kinds = [e.event_type for e in publisher.events]  # type: ignore[attr-defined]
+    assert kinds == ["ai_decision", "ai_decision", "ai_budget_exhausted"]
+    flag = publisher.events[-1]
+    assert flag.payload["max_daily_consults"] == 2  # type: ignore[attr-defined]
+    assert flag.payload["date"] == "2026-06-08"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_resets_on_new_utc_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    import datetime as _dt
+
+    days = [_dt.date(2026, 6, 8), _dt.date(2026, 6, 8), _dt.date(2026, 6, 9)]
+    seq = {"i": 0}
+
+    def fake_date() -> _dt.date:
+        d = days[min(seq["i"], len(days) - 1)]
+        seq["i"] += 1
+        return d
+
+    monkeypatch.setattr("app.runtime.ai_companion._utc_date", fake_date)
+    client = FakeClient(SignalDecision(action="buy", reason="r"))
+    state = StrategyState()
+    state.custom[WINDOW_SLOT] = [Decimal("1"), Decimal("2")]
+
+    # Cap 1: day-8 tick1 consults, day-8 tick2 is capped, day-9 tick3 consults again.
+    _stub_sleep(monkeypatch, ticks=3)
+    with pytest.raises(asyncio.CancelledError):
+        await _companion(client, max_daily_consults=1).run(state)
+
+    assert len(client.calls) == 2  # one per day, cap reset across the boundary
 
 
 def test_build_ai_companion_returns_none_for_non_ai() -> None:

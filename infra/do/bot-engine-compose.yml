@@ -33,6 +33,10 @@ services:
       # In-cluster AI Engine. The companion signs calls with the shared
       # GATEWAY_INTERNAL_HMAC_SECRET (from the env_file), which ai-engine verifies.
       AI_ENGINE_URL: http://ai-engine:5002
+      # Cost cap: max model consults per ai_signal bot per UTC day (0 = unlimited).
+      # At a 15-min decision interval a bot consults ~96×/day; 200 leaves headroom
+      # while bounding a misconfigured (1-min) bot to 200 calls instead of 1440.
+      XBT_AI_MAX_DAILY_CONSULTS: "200"
     volumes:
       - bot-data:/var/lib/xbt
     ports:
