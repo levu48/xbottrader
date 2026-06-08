@@ -4,7 +4,7 @@ import type Stripe from 'stripe';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequireUser } from '../auth/middleware.js';
 import type { SubscriptionRecord, SubscriptionStore, UserStore } from '../db/repos.js';
-import { registerBillingRoutes } from './routes.js';
+import { registerBillingDisabledRoutes, registerBillingRoutes } from './routes.js';
 
 const devRequireUser: RequireUser = async (req, reply) => {
   const u = req.headers['x-dev-user'];
@@ -195,6 +195,31 @@ describe('billing routes', () => {
     expect(res.statusCode).toBe(200);
     expect(subs.rows.get('u1')?.status).toBe('active');
     expect(await subs.isActive('u1')).toBe(true);
+    await app.close();
+  });
+});
+
+describe('billing routes (Stripe unconfigured)', () => {
+  async function regDisabled(app: FastifyInstance): Promise<void> {
+    await app.register(fastifyRawBody, { global: false, runFirst: true });
+    await registerBillingDisabledRoutes(app, { requireUser: devRequireUser });
+  }
+
+  it('status reports billing disabled and free', async () => {
+    const app = Fastify();
+    await regDisabled(app);
+    const res = await app.inject({ method: 'GET', url: '/v1/billing/status', headers: { 'x-dev-user': 'u1' } });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ enabled: false, active: false });
+    await app.close();
+  });
+
+  it('checkout returns 503 billing_unavailable', async () => {
+    const app = Fastify();
+    await regDisabled(app);
+    const res = await app.inject({ method: 'POST', url: '/v1/billing/checkout', headers: { 'x-dev-user': 'u1' } });
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.body).error).toBe('billing_unavailable');
     await app.close();
   });
 });

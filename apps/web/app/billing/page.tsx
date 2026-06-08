@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 interface BillingStatus {
+  enabled: boolean;
   active: boolean;
   status: string | null;
   currentPeriodEnd: string | null;
@@ -72,7 +73,12 @@ export default function Billing() {
             <span style={{ color: '#999' }}>· free</span>
           )}
         </h3>
-        {status.active ? (
+        {!status.enabled ? (
+          <p style={{ color: '#666' }}>
+            Billing isn&apos;t configured yet. Paper trading and backtests are available; live
+            trading and AI features will unlock once subscriptions go live.
+          </p>
+        ) : status.active ? (
           <>
             <p style={{ color: '#666' }}>
               Your subscription is {status.status}

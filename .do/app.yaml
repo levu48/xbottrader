@@ -81,6 +81,9 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${DATABASE_URL}   # managed Postgres URI; gateway migrates on boot
+      # Stripe is optional — if these are unset the gateway still boots and runs
+      # fully free (billing disabled, paid features locked). Set all three to
+      # enable subscriptions.
       - key: STRIPE_SECRET_KEY
         scope: RUN_TIME
         type: SECRET

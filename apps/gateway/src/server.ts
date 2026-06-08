@@ -9,7 +9,7 @@ import { hostname } from 'node:os';
 import { makeRequireSubscription, makeRequireUser, resolveUserId } from './auth/middleware.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { RedisSessionStore } from './auth/sessions.js';
-import { registerBillingRoutes } from './billing/routes.js';
+import { registerBillingDisabledRoutes, registerBillingRoutes } from './billing/routes.js';
 import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
@@ -71,7 +71,6 @@ async function main(): Promise<void> {
   const signer = InternalAuthSigner.fromEnv();
   const botClient = new BotEngineClient(process.env.BOT_ENGINE_URL ?? 'http://localhost:5001', signer);
   const aiClient = new AiEngineClient(process.env.AI_ENGINE_URL ?? 'http://localhost:5002', signer);
-  const stripe = new Stripe(requireEnv('STRIPE_SECRET_KEY'));
 
   // --- routes ---
   await registerAuthRoutes(app, { users, sessions, audit });
@@ -79,15 +78,27 @@ async function main(): Promise<void> {
   await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users, subs });
   await registerMarketRoutes(app, { bot: botClient, requireUser });
   await registerAiRoutes(app, { ai: aiClient, requireUser, requireSubscription });
-  await registerBillingRoutes(app, {
-    stripe,
-    subs,
-    users,
-    requireUser,
-    priceId: requireEnv('STRIPE_PRICE_ID'),
-    webhookSecret: requireEnv('STRIPE_WEBHOOK_SECRET'),
-    publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'https://xbottrader.ai',
-  });
+
+  // Billing degrades gracefully: with Stripe unconfigured the gateway still
+  // boots and the app runs fully free (paid features stay locked because no one
+  // has an active subscription).
+  const stripeSecret = process.env.STRIPE_SECRET_KEY;
+  const stripePriceId = process.env.STRIPE_PRICE_ID;
+  const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (stripeSecret && stripePriceId && stripeWebhookSecret) {
+    await registerBillingRoutes(app, {
+      stripe: new Stripe(stripeSecret),
+      subs,
+      users,
+      requireUser,
+      priceId: stripePriceId,
+      webhookSecret: stripeWebhookSecret,
+      publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'https://xbottrader.ai',
+    });
+  } else {
+    app.log.warn('Stripe not configured (STRIPE_SECRET_KEY/PRICE_ID/WEBHOOK_SECRET) — billing disabled');
+    await registerBillingDisabledRoutes(app, { requireUser });
+  }
 
   app.get('/healthz', async () => ({ ok: true }));
 

@@ -73,6 +73,7 @@ export async function registerBillingRoutes(app: FastifyInstance, deps: Deps): P
   app.get('/v1/billing/status', { preHandler: requireUser }, async (req, reply) => {
     const rec = await subs.getByUser(req.userId!);
     return reply.send({
+      enabled: true,
       active: await subs.isActive(req.userId!),
       status: rec?.status ?? null,
       currentPeriodEnd: rec?.currentPeriodEnd ?? null,
@@ -112,4 +113,34 @@ export async function registerBillingRoutes(app: FastifyInstance, deps: Deps): P
     }
     return reply.send({ received: true });
   });
+}
+
+/**
+ * Fallback when Stripe is not configured: the gateway still boots and the app
+ * runs as fully free (no one has an active subscription, so paid features stay
+ * locked). Billing actions report unavailable instead of crashing.
+ */
+export async function registerBillingDisabledRoutes(
+  app: FastifyInstance,
+  deps: { requireUser: RequireUser },
+): Promise<void> {
+  const { requireUser } = deps;
+  app.get('/v1/billing/status', { preHandler: requireUser }, async (_req, reply) =>
+    reply.send({
+      enabled: false,
+      active: false,
+      status: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+    }),
+  );
+  const unavailable = (path: string) =>
+    app.post(path, { preHandler: requireUser }, async (_req, reply) =>
+      reply.status(503).send({ error: 'billing_unavailable' }),
+    );
+  unavailable('/v1/billing/checkout');
+  unavailable('/v1/billing/portal');
+  app.post('/v1/webhooks/stripe', async (_req, reply) =>
+    reply.status(503).send({ error: 'billing_unavailable' }),
+  );
 }
