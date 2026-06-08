@@ -374,10 +374,10 @@ export default function DashboardPage() {
           </Field>
         )}
         {strategyType === 'custom_rules' && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
             <Field label="describe a strategy — AI writes the rules (optional)">
               <textarea
-                style={{ ...input, width: '100%', maxWidth: 640, minHeight: 56, resize: 'vertical', marginRight: 0 }}
+                style={{ ...input, width: 'min(100%, 640px)', boxSizing: 'border-box', minHeight: 56, resize: 'vertical', marginRight: 0 }}
                 value={authorDesc}
                 onChange={(e) => setAuthorDesc(e.target.value)}
                 maxLength={4000}
@@ -392,9 +392,9 @@ export default function DashboardPage() {
               {authoring ? 'Generating…' : 'Generate rules'}
             </button>
             {authorNote && (
-              <p style={{ margin: '8px 0 0', color: '#374151', fontSize: 13 }}>{authorNote}</p>
+              <p style={{ margin: 0, color: '#374151', fontSize: 13 }}>{authorNote}</p>
             )}
-            <p style={{ margin: '8px 0 0', color: '#6b7280', fontSize: 12 }}>
+            <p style={{ margin: 0, color: '#6b7280', fontSize: 12 }}>
               Generated rules load into the editor below — review and edit them before starting.
             </p>
           </div>
