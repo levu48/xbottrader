@@ -14,12 +14,12 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from redis.asyncio import Redis as AsyncRedis
 
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from .api.auth import InternalAuthenticator
 from .api.bots import router as bots_router
 from .api.launcher import BotLauncher
-from .api.market import router as market_router
+from .api.market import fetch_alpaca_stock_bars, router as market_router
 from .events.publisher import EventPublisher
 from .exchanges.ccxt_live import build_public_ccxt_client
 from .runtime.supervisor import Supervisor
@@ -31,6 +31,7 @@ def create_app(
     publisher: EventPublisher,
     internal_auth: InternalAuthenticator,
     public_client_factory: Callable[[str], Any] = build_public_ccxt_client,
+    equity_bars_fetcher: Callable[[str, str, int], Awaitable[list[list[float]]]] = fetch_alpaca_stock_bars,
 ) -> FastAPI:
     supervisor = Supervisor(publisher)
 
@@ -45,6 +46,7 @@ def create_app(
     app.state.launcher = launcher
     app.state.internal_auth = internal_auth
     app.state.public_client_factory = public_client_factory
+    app.state.equity_bars_fetcher = equity_bars_fetcher
     app.include_router(bots_router)
     app.include_router(market_router)
 

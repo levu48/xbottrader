@@ -420,6 +420,20 @@ type Timeframe = '1m' | '5m' | '1h' | '1d';
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '1h', '1d'];
 const POLL_MS = 15_000;
 
+// Dig the Bot Engine's actionable detail out of the gateway's error envelope
+// ({ error, upstream: '<json>' }) so the user sees e.g. "Alpaca market-data keys
+// not configured" rather than a generic message. Falls back gracefully.
+async function ohlcvErrorMessage(res: Response): Promise<string> {
+  const fallback = 'Market data unavailable for this symbol.';
+  try {
+    const body = (await res.json()) as { upstream?: string; message?: string };
+    const upstream = body.upstream ? (JSON.parse(body.upstream) as { detail?: string }) : null;
+    return upstream?.detail ?? body.message ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function MarketChart({ exchange, symbol }: { exchange: string; symbol: string }) {
   const [timeframe, setTimeframe] = useState<Timeframe>('1m');
   const [error, setError] = useState<string | null>(null);
@@ -475,7 +489,7 @@ function MarketChart({ exchange, symbol }: { exchange: string; symbol: string })
         const qs = new URLSearchParams({ exchange, symbol, timeframe, limit: '200' });
         const res = await fetch(`/v1/market/ohlcv?${qs.toString()}`);
         if (!res.ok) {
-          if (!cancelled) setError('Market data unavailable for this symbol.');
+          if (!cancelled) setError(await ohlcvErrorMessage(res));
           return;
         }
         const data = (await res.json()) as { candles: number[][] };

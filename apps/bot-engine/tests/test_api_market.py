@@ -51,15 +51,18 @@ def _signed(method: str, path: str, user_id: str, body: bytes) -> dict[str, str]
     return {"x-xbt-user": user_id, "x-xbt-ts": str(ts), "x-xbt-sig": sig}
 
 
-def _client(factory: Any) -> TestClient:
+def _client(factory: Any, equity_fetcher: Any = None) -> TestClient:
     publisher = EventPublisher(FakeRedis())
     auth = InternalAuthenticator(SECRET.encode())
-    app = create_app(
-        launcher=object(),  # unused by the market route
-        publisher=publisher,
-        internal_auth=auth,
-        public_client_factory=factory,
-    )
+    kwargs: dict[str, Any] = {
+        "launcher": object(),  # unused by the market route
+        "publisher": publisher,
+        "internal_auth": auth,
+        "public_client_factory": factory,
+    }
+    if equity_fetcher is not None:
+        kwargs["equity_bars_fetcher"] = equity_fetcher
+    app = create_app(**kwargs)
     return TestClient(app)
 
 
@@ -117,3 +120,124 @@ def test_ohlcv_requires_auth() -> None:
     client = _client(lambda ex: FakePublicClient(_CANDLES))
     resp = client.get("/market/ohlcv?symbol=BTC/USDT")
     assert resp.status_code == 401
+
+
+# --- equities (Alpaca) take a separate fetch path, not ccxt ---
+
+_EQUITY_CANDLES = [
+    [1_700_000_000_000.0, 190.0, 191.0, 189.5, 190.5, 1000.0],
+    [1_700_000_060_000.0, 190.5, 192.0, 190.0, 191.5, 800.0],
+]
+
+
+def test_ohlcv_equity_uses_equity_fetcher_not_ccxt() -> None:
+    seen: list[tuple[str, str, int]] = []
+
+    async def equity_fetcher(symbol: str, timeframe: str, limit: int) -> list[list[float]]:
+        seen.append((symbol, timeframe, limit))
+        return _EQUITY_CANDLES
+
+    def crypto_factory(exchange: str) -> FakePublicClient:
+        raise AssertionError("crypto path must not run for an equity venue")
+
+    client = _client(crypto_factory, equity_fetcher)
+    resp = client.get(
+        "/market/ohlcv?exchange=alpaca&symbol=AAPL&timeframe=5m&limit=50",
+        headers=_signed("GET", "/market/ohlcv", "u1", b""),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["candles"] == _EQUITY_CANDLES
+    assert seen == [("AAPL", "5m", 50)]
+
+
+def test_ohlcv_equity_missing_keys_maps_to_502() -> None:
+    from app.api.market import EquityDataError
+
+    async def equity_fetcher(symbol: str, timeframe: str, limit: int) -> list[list[float]]:
+        raise EquityDataError("Alpaca market-data keys not configured (set ...)")
+
+    client = _client(lambda ex: FakePublicClient(_CANDLES), equity_fetcher)
+    resp = client.get(
+        "/market/ohlcv?exchange=alpaca&symbol=AAPL",
+        headers=_signed("GET", "/market/ohlcv", "u1", b""),
+    )
+    assert resp.status_code == 502, resp.text
+    # The actionable message is surfaced to the dashboard.
+    assert "keys not configured" in resp.json()["detail"]
+
+
+def test_alpaca_stock_bars_requires_keys(monkeypatch: Any) -> None:
+    import asyncio
+
+    from app.api.market import EquityDataError, fetch_alpaca_stock_bars
+
+    monkeypatch.delenv("XBT_ALPACA_DATA_KEY", raising=False)
+    monkeypatch.delenv("XBT_ALPACA_DATA_SECRET", raising=False)
+    try:
+        asyncio.run(fetch_alpaca_stock_bars("AAPL", "1m", 10))
+    except EquityDataError as e:
+        assert "not configured" in str(e)
+    else:
+        raise AssertionError("expected EquityDataError when keys are unset")
+
+
+def test_alpaca_stock_bars_parses_response(monkeypatch: Any) -> None:
+    import asyncio
+
+    import httpx
+
+    from app.api import market
+
+    monkeypatch.setenv("XBT_ALPACA_DATA_KEY", "k")
+    monkeypatch.setenv("XBT_ALPACA_DATA_SECRET", "s")
+
+    captured: dict[str, Any] = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "symbol": "AAPL",
+                "bars": [
+                    {"t": "2023-11-14T20:00:00Z", "o": 190.0, "h": 191.0, "l": 189.5, "c": 190.5, "v": 1000},
+                    {"t": "2023-11-14T20:01:00Z", "o": 190.5, "h": 192.0, "l": 190.0, "c": 191.5, "v": 800},
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, **_: Any) -> None: ...
+        async def __aenter__(self) -> "FakeClient":
+            return self
+        async def __aexit__(self, *_: Any) -> None: ...
+        async def get(self, url: str, params: Any, headers: Any) -> FakeResp:
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            return FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    candles = asyncio.run(market.fetch_alpaca_stock_bars("AAPL", "1m", 200))
+
+    assert captured["url"].endswith("/v2/stocks/AAPL/bars")
+    assert captured["params"]["timeframe"] == "1Min"
+    assert captured["headers"]["APCA-API-KEY-ID"] == "k"
+    # First candle: [ts_ms, o, h, l, c, v] with the ISO time → epoch ms.
+    assert candles[0] == [1_699_992_000_000.0, 190.0, 191.0, 189.5, 190.5, 1000.0]
+    assert len(candles) == 2
+
+
+def test_alpaca_stock_bars_rejects_bad_timeframe(monkeypatch: Any) -> None:
+    import asyncio
+
+    from app.api.market import fetch_alpaca_stock_bars
+
+    monkeypatch.setenv("XBT_ALPACA_DATA_KEY", "k")
+    monkeypatch.setenv("XBT_ALPACA_DATA_SECRET", "s")
+    try:
+        asyncio.run(fetch_alpaca_stock_bars("AAPL", "2m", 10))
+    except ValueError as e:
+        assert "timeframe" in str(e)
+    else:
+        raise AssertionError("expected ValueError for an unsupported timeframe")
