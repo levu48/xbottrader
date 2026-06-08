@@ -6,6 +6,8 @@
 Required env vars (any mode):
     REDIS_URL
     GATEWAY_INTERNAL_HMAC_SECRET
+Optional:
+    AI_ENGINE_URL   base URL of the AI Engine; required to run ai_signal bots
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import create_engine as create_sync_engine
 
 from .api.auth import InternalAuthenticator
+from .clients.ai_engine import AiEngineClient
 from .db.models import Base
 from .db.session import create_engine_from_url, make_session_factory
 from .events.publisher import EventPublisher
@@ -80,6 +83,11 @@ def build_app() -> FastAPI:
     publisher = EventPublisher(redis)
     auth = InternalAuthenticator.from_env(secret)
 
+    # The ai_signal companion calls the AI Engine, signing with the same shared
+    # HMAC secret. Optional: absent → ai_signal bots are rejected at launch.
+    ai_engine_url = os.environ.get("AI_ENGINE_URL")
+    ai_client = AiEngineClient(ai_engine_url, auth) if ai_engine_url else None
+
     mode = os.environ.get("XBT_LAUNCHER", "prod")
     if mode == "demo":
         from .launchers.demo_paper import DemoPaperLauncher
@@ -90,7 +98,10 @@ def build_app() -> FastAPI:
 
         bar_interval_s = float(os.environ.get("XBT_DEMO_BAR_INTERVAL_S", "5"))
         launcher = DemoPaperLauncher(
-            publisher, session_factory, bar_interval_seconds=bar_interval_s
+            publisher,
+            session_factory,
+            bar_interval_seconds=bar_interval_s,
+            ai_client=ai_client,
         )
     elif mode == "prod":
         from .launchers.production import ProductionLauncher
@@ -103,7 +114,7 @@ def build_app() -> FastAPI:
         allow_live = os.environ.get("XBT_ALLOW_LIVE", "0") == "1"
 
         launcher = ProductionLauncher(
-            publisher, session_factory, cipher, allow_live=allow_live
+            publisher, session_factory, cipher, allow_live=allow_live, ai_client=ai_client
         )
     else:
         raise RuntimeError(f"unknown XBT_LAUNCHER mode: {mode}")

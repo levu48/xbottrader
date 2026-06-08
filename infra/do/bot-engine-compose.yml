@@ -1,5 +1,7 @@
 # docker-compose stack for the Bot Engine Droplet.
 # - bot-engine: the FastAPI control plane (port 5001)
+# - ai-engine:  the LLM service backing ai_signal decisions + copilot (port 5002,
+#               internal only — reached by bot-engine over the xbt network)
 #
 # Redis is now the shared DO Managed Caching (Valkey) instance — the same one the
 # Gateway consumes — so fills published here reach the Gateway's WS fanout. Set
@@ -28,10 +30,31 @@ services:
       # Staging persistence: SQLite on a named volume. Swap for the managed
       # Postgres URL (postgresql+asyncpg://…) once wired.
       DATABASE_URL: sqlite+aiosqlite:////var/lib/xbt/bot-engine.db
+      # In-cluster AI Engine. The companion signs calls with the shared
+      # GATEWAY_INTERNAL_HMAC_SECRET (from the env_file), which ai-engine verifies.
+      AI_ENGINE_URL: http://ai-engine:5002
     volumes:
       - bot-data:/var/lib/xbt
     ports:
       - "5001:5001"
+    networks:
+      - xbt
+    depends_on:
+      - ai-engine
+
+  ai-engine:
+    build:
+      context: /opt/xbt/xbottrader
+      dockerfile: apps/ai-engine/Dockerfile
+    image: xbt/ai-engine:local
+    restart: unless-stopped
+    env_file:
+      # Provides GATEWAY_INTERNAL_HMAC_SECRET (shared with bot-engine) and
+      # ANTHROPIC_API_KEY. Optionally XBT_SIGNAL_MODEL / XBT_AUTHOR_MODEL.
+      - /etc/xbt/ai-engine.env
+    # No published ports — only reachable in-network as http://ai-engine:5002.
+    expose:
+      - "5002"
     networks:
       - xbt
 

@@ -13,7 +13,7 @@ from typing import Protocol
 
 from xbt_core.market.session import MarketSession
 
-from ..runtime.supervisor import BarSource, OrderRouter
+from ..runtime.supervisor import BarSource, Companion, OrderRouter
 from ..strategies.base import Strategy
 
 
@@ -26,6 +26,8 @@ class LaunchPlan:
     session: MarketSession | None = None
     # Optional max age (ms) for a trusted mark; see Supervisor._tripped.
     max_mark_age_ms: int | None = None
+    # Optional side task sharing the bot's state (ai_signal consults the model).
+    companion: Companion | None = None
 
 
 class BotLauncher(Protocol):

@@ -23,7 +23,7 @@ interface Me {
 }
 
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
-type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules';
+type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules' | 'ai_signal';
 type ExchangeId = 'binance' | 'coinbase' | 'alpaca';
 
 const EXCHANGES: { id: ExchangeId; label: string }[] = [
@@ -118,6 +118,12 @@ export default function DashboardPage() {
   const [positionQuote, setPositionQuote] = useState('100');
   // Custom rule engine
   const [customCfg, setCustomCfg] = useState<CustomCfg>(DEFAULT_CUSTOM);
+  // AI signal (LLM in the loop)
+  const [aiQuote, setAiQuote] = useState('50');
+  const [aiIntervalMin, setAiIntervalMin] = useState('15');
+  const [aiLookback, setAiLookback] = useState('50');
+  const [aiGuidance, setAiGuidance] = useState('');
+  const [aiModel, setAiModel] = useState('');
   const wsRef = useRef<WebSocket | null>(null);
 
   // Auth gate.
@@ -172,11 +178,23 @@ export default function DashboardPage() {
         };
       case 'custom_rules':
         return buildCustomRules(symbol, customCfg);
+      case 'ai_signal': {
+        const cfg: Record<string, unknown> = {
+          strategy_type: 'ai_signal', symbol,
+          quote_amount: aiQuote,
+          decision_interval_minutes: Number(aiIntervalMin),
+          lookback_bars: Number(aiLookback),
+        };
+        // guidance/model are optional — omit when blank so server defaults apply.
+        if (aiGuidance.trim()) cfg.guidance = aiGuidance.trim();
+        if (aiModel.trim()) cfg.model = aiModel.trim();
+        return cfg;
+      }
       case 'dca':
       default:
         return { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) };
     }
-  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote, customCfg]);
+  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote, customCfg, aiQuote, aiIntervalMin, aiLookback, aiGuidance, aiModel]);
 
   const startBot = useCallback(async () => {
     setNotice(null);
@@ -264,6 +282,7 @@ export default function DashboardPage() {
               <option value="grid">Grid</option>
               <option value="ma_crossover">MA crossover</option>
               <option value="custom_rules">Custom rules</option>
+              <option value="ai_signal">AI signal</option>
             </select>
           </Field>
           <Field label="symbol">
@@ -296,7 +315,26 @@ export default function DashboardPage() {
               <Field label="position quote"><input style={{ ...input, width: 80 }} value={positionQuote} onChange={(e) => setPositionQuote(e.target.value)} /></Field>
             </>
           )}
+          {strategyType === 'ai_signal' && (
+            <>
+              <Field label="quote/buy"><input style={{ ...input, width: 70 }} value={aiQuote} onChange={(e) => setAiQuote(e.target.value)} /></Field>
+              <Field label="decision (min)"><input style={{ ...input, width: 80 }} value={aiIntervalMin} onChange={(e) => setAiIntervalMin(e.target.value)} /></Field>
+              <Field label="lookback bars"><input style={{ ...input, width: 80 }} value={aiLookback} onChange={(e) => setAiLookback(e.target.value)} /></Field>
+              <Field label="model (optional)"><input style={{ ...input, width: 150 }} value={aiModel} onChange={(e) => setAiModel(e.target.value)} placeholder="server default" /></Field>
+            </>
+          )}
         </div>
+        {strategyType === 'ai_signal' && (
+          <Field label="guidance (optional)">
+            <textarea
+              style={{ ...input, width: '100%', maxWidth: 640, minHeight: 60, resize: 'vertical', marginRight: 0 }}
+              value={aiGuidance}
+              onChange={(e) => setAiGuidance(e.target.value)}
+              maxLength={2000}
+              placeholder="Plain-English directive for the model, e.g. &quot;Only buy on strong upward momentum; stay in cash otherwise.&quot;"
+            />
+          </Field>
+        )}
         {strategyType === 'custom_rules' && <RuleBuilder cfg={customCfg} setCfg={setCustomCfg} />}
         {symbol && !symbolValid(exchange, symbol) && (
           <p style={{ margin: '8px 0 0', color: '#dc2626', fontSize: 13 }}>

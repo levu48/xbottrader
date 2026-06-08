@@ -119,6 +119,26 @@ EOF
 ssh root@"$RESERVED_IP" systemctl restart xbt-bot-engine
 ```
 
+The compose stack also runs a **droplet-local AI Engine** (`ai-engine` service,
+internal-only at `http://ai-engine:5002`). It backs the `ai_signal` strategy: the
+Bot Engine's companion consults it on each bot's `decision_interval_minutes`. We
+run a copy here rather than reuse the App Platform `ai-engine` because that one is
+VPC-internal (`${ai-engine.PRIVATE_URL}`) and unreachable from this Droplet. Seed
+its env file too:
+
+```bash
+ssh root@"$RESERVED_IP" tee /etc/xbt/ai-engine.env >/dev/null <<EOF
+GATEWAY_INTERNAL_HMAC_SECRET=$GATEWAY_INTERNAL_HMAC_SECRET  # same secret the Bot Engine signs with
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+# Optional model override for ai_signal decisions (default claude-sonnet-4-6):
+# XBT_SIGNAL_MODEL=claude-opus-4-8
+EOF
+```
+
+(The Bot Engine reaches it via `AI_ENGINE_URL=http://ai-engine:5002`, already set
+in `bot-engine-compose.yml`. Omitting `AI_ENGINE_URL` makes `ai_signal` bots fail
+fast at start rather than silently never trade.)
+
 Verify:
 
 ```bash

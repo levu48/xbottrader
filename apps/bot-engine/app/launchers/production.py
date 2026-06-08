@@ -21,6 +21,7 @@ from xbt_core.market.session import AssetClass, asset_class_for, session_for
 
 from ..api.launcher import LaunchPlan
 from ..api.schemas import StartBotRequest
+from ..clients.ai_engine import AiEngineClient
 from ..db.repositories import BotConfigRepo
 from ..events.publisher import EventPublisher
 from ..exchanges.alpaca_data import build_alpaca_stock_data_client
@@ -33,6 +34,7 @@ from ..exchanges.ccxt_live import (
     build_public_ccxt_client,
 )
 from ..exchanges.paper import PaperConfig, PaperExchangeAdapter
+from ..runtime.ai_companion import build_ai_companion
 from ..runtime.router import ExchangeOrderRouter
 from ..security.keys import EncryptedEnvelope, EnvelopeCipher
 from ..strategies.factory import build_strategy
@@ -60,11 +62,13 @@ class ProductionLauncher:
         equity_data_client_factory: EquityDataClientFactory = build_alpaca_stock_data_client,
         timeframe: str = "1m",
         poll_interval_s: float = 2.0,
+        ai_client: AiEngineClient | None = None,
     ) -> None:
         self._publisher = publisher
         self._sessions = session_factory
         self._cipher = cipher
         self._allow_live = allow_live
+        self._ai_client = ai_client
         self._ccxt_client_factory = ccxt_client_factory
         self._public_client_factory = public_client_factory
         self._equity_data_client_factory = equity_data_client_factory
@@ -146,12 +150,22 @@ class ProductionLauncher:
             publisher=self._publisher,
             session_factory=self._sessions,
         )
+        # ai_signal bots need a model-in-the-loop companion; raises here (→ 400) if
+        # the AI Engine isn't configured. None for every other strategy.
+        companion = build_ai_companion(
+            ai_client=self._ai_client,
+            params=params,
+            user_id=user_id,
+            bot_id=bot_id,
+            publisher=self._publisher,
+        )
         return LaunchPlan(
             strategy=strategy,
             bars=bars,
             router=router,
             session=session if is_equity else None,
             max_mark_age_ms=_EQUITY_MAX_MARK_AGE_MS if is_equity else None,
+            companion=companion,
         )
 
     def _build_live_adapter(self, exchange: str, request: StartBotRequest) -> CcxtExchangeAdapter:
