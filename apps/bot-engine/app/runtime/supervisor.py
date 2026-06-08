@@ -52,6 +52,19 @@ class BarSource(Protocol):
         ...
 
 
+class Companion(Protocol):
+    """A side task that runs alongside a bot, sharing its StrategyState.
+
+    Used by the ai_signal strategy: the companion consults the model on an
+    interval and writes decisions into ``state.custom`` for ``on_bar`` to act on.
+    It loops until cancelled; the Supervisor cancels it when the bot's bar loop
+    ends (stop, kill, error, or stream exhaustion).
+    """
+
+    async def run(self, state: StrategyState) -> None:
+        ...
+
+
 class OrderRouter(Protocol):
     """Submits an order intent. Live → exchange client; paper → in-memory simulator.
 
@@ -132,6 +145,7 @@ class Supervisor:
         max_loss_quote: Decimal | None = None,
         session: MarketSession | None = None,
         max_mark_age_ms: int | None = None,
+        companion: Companion | None = None,
     ) -> None:
         async with self._lock:
             if bot_id in self._handles and self._handles[bot_id].state in (
@@ -150,7 +164,7 @@ class Supervisor:
             )
             self._handles[bot_id] = handle
             handle.task = asyncio.create_task(
-                self._run(handle, strategy, bars, router), name=f"bot:{bot_id}"
+                self._run(handle, strategy, bars, router, companion), name=f"bot:{bot_id}"
             )
 
     async def stop(self, bot_id: str) -> None:
@@ -277,11 +291,19 @@ class Supervisor:
         strategy: Strategy,
         bars: BarSource,
         router: OrderRouter,
+        companion: Companion | None = None,
     ) -> None:
         handle.state = BotState.RUNNING
         await self._publisher.publish(
             Event("bot_started", handle.user_id, handle.bot_id, {})
         )
+        # The companion (ai_signal) runs as a sibling task, sharing this bot's
+        # StrategyState, and is torn down with the bar loop in the finally below.
+        companion_task: asyncio.Task[None] | None = None
+        if companion is not None:
+            companion_task = asyncio.create_task(
+                companion.run(handle.strategy_state), name=f"companion:{handle.bot_id}"
+            )
         try:
             async for bar in bars:
                 if handle.state == BotState.STOPPING:
@@ -328,6 +350,15 @@ class Supervisor:
                 )
             )
             return
+        finally:
+            # Tear down the companion on every exit path (stop, kill, error,
+            # circuit trip, stream end) so no orphan task keeps consulting.
+            if companion_task is not None:
+                companion_task.cancel()
+                try:
+                    await companion_task
+                except (asyncio.CancelledError, Exception):
+                    pass
         handle.state = BotState.STOPPED
         await self._publisher.publish(
             Event("bot_stopped", handle.user_id, handle.bot_id, {})

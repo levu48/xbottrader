@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..api.launcher import LaunchPlan
 from ..api.schemas import StartBotRequest
+from ..clients.ai_engine import AiEngineClient
 from ..db.repositories import BotConfigRepo
 from ..events.publisher import EventPublisher
 from ..exchanges.paper import PaperConfig, PaperExchangeAdapter
+from ..runtime.ai_companion import build_ai_companion
 from ..runtime.router import ExchangeOrderRouter
 from ..strategies.base import Bar
 from ..strategies.factory import build_strategy
@@ -80,10 +82,12 @@ class DemoPaperLauncher:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         bar_interval_seconds: float = 5.0,
+        ai_client: AiEngineClient | None = None,
     ) -> None:
         self._publisher = publisher
         self._sessions = session_factory
         self._bar_interval_s = bar_interval_seconds
+        self._ai_client = ai_client
 
     async def launch(
         self,
@@ -123,4 +127,11 @@ class DemoPaperLauncher:
             publisher=self._publisher,
             session_factory=self._sessions,
         )
-        return LaunchPlan(strategy=strategy, bars=bars, router=router)
+        companion = build_ai_companion(
+            ai_client=self._ai_client,
+            params=params,
+            user_id=user_id,
+            bot_id=bot_id,
+            publisher=self._publisher,
+        )
+        return LaunchPlan(strategy=strategy, bars=bars, router=router, companion=companion)
