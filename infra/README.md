@@ -192,6 +192,28 @@ That `git pull`s and rebuilds the compose stack.
 
 ---
 
+## Gotchas
+
+- **Binance geo-blocks datacenter / US IPs.** `api.binance.com` returns HTTP
+  451 (or just times out) from many cloud hosts, including US-region DO
+  Droplets. ccxt's `fetch_ohlcv` then throws, so the dashboard OHLCV chart shows
+  "Market data unavailable…" for `binance` symbols — **and Binance paper-marks /
+  live orders fail the same way** (the chart is just the first place it surfaces;
+  the Reserved IP stabilizes key *allowlisting* but does nothing about Binance's
+  geo-restrictions). Confirm from the Droplet:
+  ```bash
+  curl -s -o /dev/null -w "binance: %{http_code}\n" \
+    "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=2"
+  # 451 / hang → blocked. Compare with coinbase/kraken (usually 200 from US).
+  ```
+  Mitigations: use a US-reachable venue (Coinbase, Kraken, or `binanceus` — note
+  `BTC/USD` vs `BTC/USDT` and separate keys), source crypto *market data* from a
+  reachable venue independent of the trade venue, or host the Droplet in a
+  Binance-friendly region (Amsterdam/Frankfurt/Singapore — but that changes the
+  Reserved IP). Equities (Alpaca) are unaffected.
+
+---
+
 ## What's intentionally deferred
 
 - **Managed Redis** (DO Caching) → currently runs on the Droplet. Both
