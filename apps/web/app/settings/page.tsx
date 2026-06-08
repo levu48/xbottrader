@@ -106,14 +106,24 @@ export default function Settings() {
         <h3 style={{ marginTop: 0 }}>Exchange API keys</h3>
         <p style={{ color: '#999', fontSize: 13, marginTop: 0 }}>
           Encrypted before storage; only the Bot Engine ever decrypts. Needed for live trading.
+          {form.exchange === 'alpaca' && (
+            <> Alpaca uses an <strong>API key ID + secret</strong> (no passphrase) and issues separate
+            keys for paper vs live — use your paper keys here.</>
+          )}
         </p>
         <form onSubmit={addKey}>
-          <input style={input} placeholder="exchange" value={form.exchange} onChange={(e) => setForm({ ...form, exchange: e.target.value })} />
+          <select style={input} value={form.exchange} onChange={(e) => setForm({ ...form, exchange: e.target.value })}>
+            <option value="binance">Binance (crypto)</option>
+            <option value="coinbase">Coinbase (crypto)</option>
+            <option value="alpaca">Alpaca (US stocks)</option>
+          </select>
           <input style={input} placeholder="label (optional)" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
           <br />
-          <input style={{ ...input, width: 220 }} placeholder="API key" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
+          <input style={{ ...input, width: 220 }} placeholder={form.exchange === 'alpaca' ? 'API key ID' : 'API key'} value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
           <input style={{ ...input, width: 220 }} type="password" placeholder="API secret" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} />
-          <input style={input} placeholder="passphrase (optional)" value={form.passphrase} onChange={(e) => setForm({ ...form, passphrase: e.target.value })} />
+          {form.exchange !== 'alpaca' && (
+            <input style={input} placeholder="passphrase (optional)" value={form.passphrase} onChange={(e) => setForm({ ...form, passphrase: e.target.value })} />
+          )}
           <br />
           <button style={btn} type="submit">Store key</button>
         </form>

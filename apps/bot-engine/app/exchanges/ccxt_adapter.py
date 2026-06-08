@@ -14,11 +14,16 @@ real-money deploy.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol
 
 from ..strategies.base import OrderIntent
 from .base import FillEvent, PlacementResult, SubmittedOrder, new_order_id, utcnow
+from .ccxt_live import _is_alpaca
+
+# Alpaca supports fractional equity quantities to 9 decimal places. Round DOWN so
+# a quote-sized order never rounds *up* into spending more than intended.
+_FRACTIONAL_QTY_STEP = Decimal("0.000000001")
 
 # ccxt status strings → our adapter's normalized status
 _STATUS_MAP: dict[str, str] = {
@@ -66,12 +71,22 @@ class CcxtExchangeAdapter:
         return self._venue
 
     async def place_order(self, intent: OrderIntent) -> PlacementResult:
+        qty = intent.quantity
+        if _is_alpaca(self._venue):
+            qty = qty.quantize(_FRACTIONAL_QTY_STEP, rounding=ROUND_DOWN)
+            if qty <= 0:
+                # Rounded below the minimum tradeable size — reject locally.
+                return self._rejected(intent)
+            # Alpaca does not accept fractional *limit* orders.
+            if intent.type == "limit" and qty != qty.to_integral_value():
+                return self._rejected(intent)
+
         price_arg = float(intent.limit_price) if intent.limit_price is not None else None
         raw = await self._client.create_order(
             symbol=intent.symbol,
             type=intent.type,
             side=intent.side,
-            amount=float(intent.quantity),
+            amount=float(qty),
             price=price_arg,
         )
         exchange_order_id = str(raw.get("id") or new_order_id())
@@ -90,6 +105,17 @@ class CcxtExchangeAdapter:
 
     async def close(self) -> None:
         await self._client.close()
+
+    def _rejected(self, intent: OrderIntent) -> PlacementResult:
+        """A locally-rejected order (never sent to the venue). Reuses 'rejected'."""
+        return PlacementResult(
+            order=SubmittedOrder(
+                exchange_order_id=new_order_id(),
+                intent=intent,
+                submitted_at=utcnow(),
+                status="rejected",
+            )
+        )
 
 
 def _extract_fills(raw: dict[str, Any], intent: OrderIntent) -> list[FillEvent]:

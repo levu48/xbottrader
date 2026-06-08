@@ -63,6 +63,8 @@ async def start_bot(
             bars=plan.bars,
             router=plan.router,
             max_loss_quote=body.risk.max_loss_quote,
+            session=plan.session,
+            max_mark_age_ms=plan.max_mark_age_ms,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e

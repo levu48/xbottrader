@@ -11,10 +11,12 @@ about keeping them in sync via a JSON Schema diff in CI).
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from xbt_core.market.session import AssetClass, asset_class_for
 
 # Re-exported so existing `from app.api.schemas import DcaParams, ...` keep working.
 from xbt_core.strategy_config import (  # noqa: F401
@@ -28,6 +30,11 @@ from xbt_core.strategy_config import (  # noqa: F401
     RuleSpec,
     StrategyConfig,
 )
+
+# Symbol shapes, validated per asset class (mirrors Symbol_ in packages/shared).
+# Crypto: BASE/QUOTE (e.g. BTC/USDT). US equity: a bare ticker (e.g. AAPL, BRK.B).
+_CRYPTO_SYMBOL_RE = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
+_EQUITY_SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 
 
 class RiskLimits(BaseModel):
@@ -59,11 +66,28 @@ class EncryptedKeyEnvelope(BaseModel):
 class StartBotRequest(BaseModel):
     strategy: StrategyConfig
     mode: Literal["paper", "live"] = "paper"
-    # ccxt venue id (e.g. "binance", "coinbase"). Drives the live client and the
-    # public market-data feed; ignored by the synthetic demo launcher.
+    # Venue id. Crypto: ccxt venue ("binance", "coinbase"). US equities: "alpaca"
+    # (or "alpaca-paper"). Drives the adapter, market-data feed, and market-hours
+    # session; ignored by the synthetic demo launcher.
     exchange: str = "binance"
     risk: RiskLimits = Field(default_factory=RiskLimits)
     credentials: EncryptedKeyEnvelope | None = None
+
+    @model_validator(mode="after")
+    def _symbol_matches_asset_class(self) -> "StartBotRequest":
+        symbol = self.strategy.symbol
+        if asset_class_for(self.exchange) is AssetClass.US_EQUITY:
+            if not _EQUITY_SYMBOL_RE.match(symbol):
+                raise ValueError(
+                    f"{symbol!r} is not a valid equity ticker for {self.exchange!r} "
+                    "(expected e.g. AAPL)"
+                )
+        elif not _CRYPTO_SYMBOL_RE.match(symbol):
+            raise ValueError(
+                f"{symbol!r} is not a valid crypto pair for {self.exchange!r} "
+                "(expected BASE/QUOTE, e.g. BTC/USDT)"
+            )
+        return self
 
 
 class BotStateResponse(BaseModel):

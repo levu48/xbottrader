@@ -11,15 +11,22 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Protocol
+
+from xbt_core.market.session import MarketSession
 
 from ..events.publisher import Event, EventPublisher
 from ..exchanges.base import FillEvent
 from ..strategies.base import Bar, OrderIntent, Strategy, StrategyState
 
 logger = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    return int(datetime.now(UTC).timestamp() * 1000)
 
 
 class BotState(str, Enum):
@@ -33,6 +40,9 @@ class BotState(str, Enum):
     PAUSED = "paused"
     # Force-stopped via the kill switch.
     KILLED = "killed"
+    # Alive but not trading because the venue's market is closed (equities).
+    # Resumes to RUNNING on the first bar after the market reopens.
+    IDLE = "idle"
 
 
 class BarSource(Protocol):
@@ -96,6 +106,13 @@ class BotHandle:
     max_loss_quote: Decimal | None = None
     ledger: PnLLedger = field(default_factory=PnLLedger)
     last_mark: Decimal | None = None
+    # Wall-clock-aligned timestamp (epoch ms) of the bar that set last_mark.
+    last_mark_ts_ms: int | None = None
+    # Market-hours session. None = always-open / no gating (crypto path).
+    session: MarketSession | None = None
+    # If set, the circuit breaker ignores a mark older than this (defensive
+    # belt-and-suspenders against a stale bar arriving across a market gap).
+    max_mark_age_ms: int | None = None
 
 
 class Supervisor:
@@ -113,11 +130,14 @@ class Supervisor:
         bars: BarSource,
         router: OrderRouter,
         max_loss_quote: Decimal | None = None,
+        session: MarketSession | None = None,
+        max_mark_age_ms: int | None = None,
     ) -> None:
         async with self._lock:
             if bot_id in self._handles and self._handles[bot_id].state in (
                 BotState.STARTING,
                 BotState.RUNNING,
+                BotState.IDLE,
             ):
                 raise RuntimeError(f"bot {bot_id} already running")
             handle = BotHandle(
@@ -125,6 +145,8 @@ class Supervisor:
                 user_id=user_id,
                 router=router,
                 max_loss_quote=max_loss_quote,
+                session=session,
+                max_mark_age_ms=max_mark_age_ms,
             )
             self._handles[bot_id] = handle
             handle.task = asyncio.create_task(
@@ -198,6 +220,21 @@ class Supervisor:
         cap = handle.max_loss_quote
         if cap is None or handle.last_mark is None:
             return False
+        # Never act on a mark we can't trust. For an equity bot the mark goes
+        # stale across the overnight/weekend gap, so: don't trip while the market
+        # is closed, and (defensively) don't trip on a mark older than the
+        # configured age. Both checks are no-ops on the crypto path (session is
+        # None, marks are fresh), keeping crypto behavior identical.
+        if handle.session is not None:
+            now_ms = _now_ms()
+            if not handle.session.is_open(now_ms):
+                return False
+            if (
+                handle.max_mark_age_ms is not None
+                and handle.last_mark_ts_ms is not None
+                and now_ms - handle.last_mark_ts_ms > handle.max_mark_age_ms
+            ):
+                return False
         pnl = handle.ledger.pnl(handle.last_mark)
         if pnl > -cap:
             return False
@@ -226,7 +263,13 @@ class Supervisor:
         return h.state if h else None
 
     def running_bots(self) -> list[str]:
-        return [bid for bid, h in self._handles.items() if h.state == BotState.RUNNING]
+        # "Live" = actively trading (RUNNING) or merely waiting for the market to
+        # reopen (IDLE). Both need to be stopped on shutdown.
+        return [
+            bid
+            for bid, h in self._handles.items()
+            if h.state in (BotState.RUNNING, BotState.IDLE)
+        ]
 
     async def _run(
         self,
@@ -243,7 +286,25 @@ class Supervisor:
             async for bar in bars:
                 if handle.state == BotState.STOPPING:
                     break
+                # Equity bots: if a bar arrives while the market is closed (stale
+                # / pre-market data), don't trade it — go IDLE and wait. No-op for
+                # crypto (session None → always open).
+                if handle.session is not None and not handle.session.is_open(_now_ms()):
+                    if handle.state != BotState.IDLE:
+                        handle.state = BotState.IDLE
+                        await self._publisher.publish(
+                            Event("bot_idle", handle.user_id, handle.bot_id,
+                                  {"reason": "market_closed"})
+                        )
+                    continue
+                if handle.state == BotState.IDLE:
+                    handle.state = BotState.RUNNING
+                    await self._publisher.publish(
+                        Event("bot_resumed", handle.user_id, handle.bot_id,
+                              {"reason": "market_open"})
+                    )
                 handle.last_mark = bar.close
+                handle.last_mark_ts_ms = bar.ts_ms
                 intents = strategy.on_bar(bar, handle.strategy_state)
                 for intent in intents:
                     fills = await router.submit(handle.bot_id, intent) or []

@@ -32,7 +32,16 @@ export const FillEvent = z.object({
 });
 
 export const BotLifecycleEvent = z.object({
-  event_type: z.enum(['bot_started', 'bot_stopped', 'bot_paused', 'bot_killed']),
+  // bot_idle / bot_resumed are emitted by equity bots when the venue's market
+  // closes/reopens (the bot is alive but not trading while closed).
+  event_type: z.enum([
+    'bot_started',
+    'bot_stopped',
+    'bot_paused',
+    'bot_killed',
+    'bot_idle',
+    'bot_resumed',
+  ]),
   user_id: Uuid,
   bot_id: Uuid,
   ts: IsoTimestamp,

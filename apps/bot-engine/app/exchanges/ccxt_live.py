@@ -16,12 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
 from ..strategies.base import Bar
+
+# Venue ids that map to ccxt's "alpaca" exchange (US equities). Both the live and
+# paper venue ids resolve to the same ccxt class; paper is selected via sandbox
+# mode, not a different class.
+_ALPACA_VENUES = frozenset({"alpaca", "alpaca-paper"})
 
 # A single ccxt OHLCV row: [ts_ms, open, high, low, close, volume].
 Candle = Sequence[Any]
@@ -126,7 +132,12 @@ def _to_bar(candle: Candle, symbol: str) -> Bar:
 
 
 def build_ccxt_client(exchange: str, credentials: ExchangeCredentials) -> Any:
-    """Construct an authed ccxt async client. The key lives only in this client."""
+    """Construct an authed ccxt async client. The key lives only in this client.
+
+    For Alpaca, order placement is routed to the *paper* trading endpoint via
+    ``set_sandbox_mode(True)``. Real-money live trading is a deliberate later
+    opt-in, not reachable from this code path yet.
+    """
     cls = _exchange_class(exchange)
     config: dict[str, Any] = {
         "apiKey": credentials.api_key,
@@ -135,18 +146,42 @@ def build_ccxt_client(exchange: str, credentials: ExchangeCredentials) -> Any:
     }
     if credentials.password:
         config["password"] = credentials.password
-    return cls(config)
+    client = cls(config)
+    if _is_alpaca(exchange):
+        client.set_sandbox_mode(True)  # → paper-api.alpaca.markets
+    return client
 
 
 def build_public_ccxt_client(exchange: str) -> Any:
-    """Construct a keyless ccxt async client for public market data."""
-    return _exchange_class(exchange)({"enableRateLimit": True})
+    """Construct a ccxt async client for public market data.
+
+    Crypto venues serve OHLCV without keys. Alpaca's market-data API requires
+    authentication, so for Alpaca we source a server-level data key from the
+    environment (``XBT_ALPACA_DATA_KEY`` / ``XBT_ALPACA_DATA_SECRET``). If those
+    are unset the client is still constructed (so boot/tests don't fail), but
+    live data fetches will error until the keys are provided.
+    """
+    cls = _exchange_class(exchange)
+    config: dict[str, Any] = {"enableRateLimit": True}
+    if _is_alpaca(exchange):
+        key = os.environ.get("XBT_ALPACA_DATA_KEY")
+        secret = os.environ.get("XBT_ALPACA_DATA_SECRET")
+        if key and secret:
+            config["apiKey"] = key
+            config["secret"] = secret
+    return cls(config)
+
+
+def _is_alpaca(exchange: str) -> bool:
+    return exchange in _ALPACA_VENUES
 
 
 def _exchange_class(exchange: str) -> Any:
     import ccxt.async_support as ccxt_async  # lazy: keeps app boot ccxt-free
 
-    cls = getattr(ccxt_async, exchange, None)
+    # Both "alpaca" and "alpaca-paper" map to ccxt's single "alpaca" class.
+    ccxt_id = "alpaca" if _is_alpaca(exchange) else exchange
+    cls = getattr(ccxt_async, ccxt_id, None)
     if cls is None:
         raise ValueError(f"unknown exchange: {exchange!r}")
     return cls

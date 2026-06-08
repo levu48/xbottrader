@@ -1,8 +1,14 @@
 """Dollar-cost averaging strategy.
 
-Every ``interval_minutes`` of wall-clock time, buy ``quote_amount`` worth of
+Every ``interval_minutes`` of elapsed bar time, buy ``quote_amount`` worth of
 ``symbol`` at the market. The simplest possible strategy — exists to exercise
 the full pipeline (signals → orders → fills → PnL → reporting).
+
+The interval is measured against bar timestamps (wall-clock). For an equity bot,
+a market-closed gap (overnight/weekend) simply elapses, so the interval will have
+passed by the first bar of the next session and the bot buys then — i.e. "every N
+minutes of market time, and at least once per session." Trading-time-aware
+intervals are a deferred refinement.
 """
 
 from __future__ import annotations

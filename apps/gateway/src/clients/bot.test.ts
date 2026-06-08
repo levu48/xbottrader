@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BotEngineClient, BotEngineError, type FetchLike } from './bot.js';
+import { BotEngineClient, BotEngineError, StartBotRequest, type FetchLike } from './bot.js';
 import { HEADER_SIG, HEADER_TS, HEADER_USER, InternalAuthSigner } from './internal-auth.js';
 
 const fakeFetch = (
@@ -125,5 +125,36 @@ describe('BotEngineClient', () => {
     const res = await client.killAll({ userId: 'u1' });
     expect(res.killed).toEqual(['b1', 'b2']);
     expect(captured.calls[0]!.url).toBe('http://upstream:5001/bots/kill-all');
+  });
+});
+
+describe('StartBotRequest venue/symbol validation', () => {
+  const dca = (symbol: string) => ({
+    strategy_type: 'dca' as const,
+    symbol,
+    quote_amount: '100',
+    interval_minutes: 60,
+  });
+
+  it('accepts a crypto pair on a crypto venue', () => {
+    expect(StartBotRequest.safeParse({ strategy: dca('BTC/USDT'), exchange: 'binance' }).success).toBe(true);
+  });
+
+  it('accepts a bare ticker on alpaca', () => {
+    expect(StartBotRequest.safeParse({ strategy: dca('AAPL'), exchange: 'alpaca' }).success).toBe(true);
+    expect(StartBotRequest.safeParse({ strategy: dca('BRK.B'), exchange: 'alpaca' }).success).toBe(true);
+  });
+
+  it('rejects a stock ticker on a crypto venue', () => {
+    expect(StartBotRequest.safeParse({ strategy: dca('AAPL'), exchange: 'binance' }).success).toBe(false);
+  });
+
+  it('rejects a crypto pair on alpaca', () => {
+    expect(StartBotRequest.safeParse({ strategy: dca('BTC/USDT'), exchange: 'alpaca' }).success).toBe(false);
+  });
+
+  it('defaults to crypto validation when exchange is omitted', () => {
+    expect(StartBotRequest.safeParse({ strategy: dca('BTC/USDT') }).success).toBe(true);
+    expect(StartBotRequest.safeParse({ strategy: dca('AAPL') }).success).toBe(false);
   });
 });

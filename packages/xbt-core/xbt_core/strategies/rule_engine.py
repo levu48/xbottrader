@@ -35,7 +35,9 @@ Deliberate v1 constraints (each keeps the parity invariant or bounds risk):
 - **Edge-triggered rules** — a rule fires on the bar its condition flips
   false→true, not every bar it stays true. ``crossover`` is naturally edge-only;
   for level conditions (``rsi < 30``) this means "fire once on entry", which is
-  almost always what a user means. ``cooldown_minutes`` further rate-limits.
+  almost always what a user means. ``cooldown_minutes`` further rate-limits
+  (measured against bar timestamps; an equity market-closed gap counts toward the
+  cooldown, so it simply elapses across the gap).
 - **No inventory guard** — a ``sell`` rule does not check that there is anything
   to sell; overselling is caught downstream by the exchange adapter and the
   Supervisor's risk limits, not here.

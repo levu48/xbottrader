@@ -16,10 +16,24 @@ interface Me {
 
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
 type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules';
+type ExchangeId = 'binance' | 'coinbase' | 'alpaca';
 
-// Mirrors Symbol_ in packages/shared/src/primitives.ts — the gateway rejects
-// anything else with a 400. Crypto pairs only (ccxt venues), e.g. "BTC/USDT".
-const SYMBOL_RE = /^[A-Z0-9]+\/[A-Z0-9]+$/;
+const EXCHANGES: { id: ExchangeId; label: string }[] = [
+  { id: 'binance', label: 'Binance · crypto' },
+  { id: 'coinbase', label: 'Coinbase · crypto' },
+  { id: 'alpaca', label: 'Alpaca · US stocks' },
+];
+
+// Mirrors Symbol_ / assetClassFor in packages/shared/src/primitives.ts — the
+// gateway rejects a mismatched symbol with a 400. Crypto venues use BASE/QUOTE
+// (e.g. BTC/USDT); equity venues use a bare ticker (e.g. AAPL).
+const CRYPTO_SYMBOL_RE = /^[A-Z0-9]+\/[A-Z0-9]+$/;
+const EQUITY_SYMBOL_RE = /^[A-Z]{1,5}(\.[A-Z])?$/;
+const isEquityExchange = (ex: string): boolean => ex === 'alpaca';
+const symbolValid = (ex: string, sym: string): boolean =>
+  (isEquityExchange(ex) ? EQUITY_SYMBOL_RE : CRYPTO_SYMBOL_RE).test(sym);
+const symbolHint = (ex: string): string =>
+  isEquityExchange(ex) ? 'a stock ticker, e.g. AAPL' : 'BASE/QUOTE, e.g. BTC/USDT';
 
 // --- Custom rule-engine builder shapes (UI-side; flattened to the DSL on send) -
 type IndFn = 'price' | 'value' | 'sma' | 'rsi';
@@ -79,6 +93,7 @@ export default function DashboardPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [botId, setBotId] = useState('bot-1');
+  const [exchange, setExchange] = useState<ExchangeId>('binance');
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [strategyType, setStrategyType] = useState<StrategyType>('dca');
   // DCA
@@ -157,16 +172,17 @@ export default function DashboardPage() {
 
   const startBot = useCallback(async () => {
     setNotice(null);
-    if (!SYMBOL_RE.test(symbol)) {
-      setNotice('Symbol must be BASE/QUOTE, e.g. BTC/USDT (crypto pairs only).');
+    if (!symbolValid(exchange, symbol)) {
+      setNotice(`Symbol must be ${symbolHint(exchange)}.`);
       return;
     }
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
       strategy: buildStrategy(),
       mode: 'paper',
+      exchange,
     });
-    setNotice(r.ok ? `started ${botId} (${strategyType})` : `start failed: ${r.text}`);
-  }, [api, botId, symbol, strategyType, buildStrategy]);
+    setNotice(r.ok ? `started ${botId} (${strategyType} on ${exchange})` : `start failed: ${r.text}`);
+  }, [api, botId, exchange, symbol, strategyType, buildStrategy]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -220,6 +236,20 @@ export default function DashboardPage() {
         <h3 style={{ marginTop: 0 }}>Start a paper bot</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0 }}>
           <Field label="bot id"><input style={{ ...input, width: 90 }} value={botId} onChange={(e) => setBotId(e.target.value)} /></Field>
+          <Field label="exchange">
+            <select
+              style={{ ...input, width: 150 }}
+              value={exchange}
+              onChange={(e) => {
+                const ex = e.target.value as ExchangeId;
+                setExchange(ex);
+                // Swap to a sensible default symbol when crossing asset classes.
+                setSymbol((s) => (symbolValid(ex, s) ? s : isEquityExchange(ex) ? 'AAPL' : 'BTC/USDT'));
+              }}
+            >
+              {EXCHANGES.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+            </select>
+          </Field>
           <Field label="strategy">
             <select style={{ ...input, width: 140 }} value={strategyType} onChange={(e) => setStrategyType(e.target.value as StrategyType)}>
               <option value="dca">DCA</option>
@@ -230,10 +260,10 @@ export default function DashboardPage() {
           </Field>
           <Field label="symbol">
             <input
-              style={{ ...input, width: 110, borderColor: symbol && !SYMBOL_RE.test(symbol) ? '#dc2626' : '#ccc' }}
+              style={{ ...input, width: 110, borderColor: symbol && !symbolValid(exchange, symbol) ? '#dc2626' : '#ccc' }}
               value={symbol}
               onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-              placeholder="BTC/USDT"
+              placeholder={isEquityExchange(exchange) ? 'AAPL' : 'BTC/USDT'}
             />
           </Field>
 
@@ -260,13 +290,16 @@ export default function DashboardPage() {
           )}
         </div>
         {strategyType === 'custom_rules' && <RuleBuilder cfg={customCfg} setCfg={setCustomCfg} />}
-        {symbol && !SYMBOL_RE.test(symbol) && (
+        {symbol && !symbolValid(exchange, symbol) && (
           <p style={{ margin: '8px 0 0', color: '#dc2626', fontSize: 13 }}>
-            Symbol must be <strong>BASE/QUOTE</strong>, e.g. <code>BTC/USDT</code> — crypto pairs only (no stock tickers).
+            Symbol must be {symbolHint(exchange)}.{' '}
+            {isEquityExchange(exchange)
+              ? 'US stock tickers only on Alpaca.'
+              : 'Crypto pairs only on this exchange.'}
           </p>
         )}
         <div style={{ marginTop: 12 }}>
-          <button style={{ ...btn, ...(SYMBOL_RE.test(symbol) ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }} onClick={startBot} disabled={!SYMBOL_RE.test(symbol)}>Start</button>
+          <button style={{ ...btn, ...(symbolValid(exchange, symbol) ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }} onClick={startBot} disabled={!symbolValid(exchange, symbol)}>Start</button>
           <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>
           <button style={{ ...btnDanger, marginLeft: 8 }} onClick={killAll}>Kill all</button>
         </div>

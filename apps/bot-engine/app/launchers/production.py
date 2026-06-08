@@ -16,6 +16,8 @@ from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from xbt_core.exchanges.session_guard import SessionGuardedAdapter
+from xbt_core.market.session import AssetClass, asset_class_for, session_for
 
 from ..api.launcher import LaunchPlan
 from ..api.schemas import StartBotRequest
@@ -32,6 +34,10 @@ from ..exchanges.paper import PaperConfig, PaperExchangeAdapter
 from ..runtime.router import ExchangeOrderRouter
 from ..security.keys import EncryptedEnvelope, EnvelopeCipher
 from ..strategies.factory import build_strategy
+
+# Skip the circuit breaker on an equity mark older than this (defensive; the
+# primary guard is "market closed"). Generous so it never false-trips intraday.
+_EQUITY_MAX_MARK_AGE_MS = 15 * 60 * 1000
 
 CcxtClientFactory = Callable[[str, ExchangeCredentials], Any]
 PublicClientFactory = Callable[[str], Any]
@@ -89,15 +95,31 @@ class ProductionLauncher:
 
         strategy = build_strategy(params)
 
-        if request.mode == "live":
-            adapter = self._build_live_adapter(exchange, request)
-        else:
-            adapter = PaperExchangeAdapter(venue=exchange, config=PaperConfig())
+        is_equity = asset_class_for(exchange) is AssetClass.US_EQUITY
+        session = session_for(exchange)
 
-        # Public client drives market data for both modes (no keys needed).
-        mark_sink = (
-            adapter.update_mark if isinstance(adapter, PaperExchangeAdapter) else None
-        )
+        # Build the order-placing adapter. Keep a direct reference to the paper
+        # adapter (if any) so the bar source can feed it marks even after we wrap
+        # it in the market-hours guard below.
+        paper_adapter: PaperExchangeAdapter | None = None
+        if request.mode == "live":
+            inner = self._build_live_adapter(exchange, request)
+        else:
+            # Equities settle in USD and US equities are commission-free on Alpaca.
+            paper_config = (
+                PaperConfig(fee_bps=0, fee_currency="USD") if is_equity else PaperConfig()
+            )
+            paper_adapter = PaperExchangeAdapter(venue=exchange, config=paper_config)
+            inner = paper_adapter
+
+        # Equity venues close — guard order placement against market hours. Crypto
+        # uses the bare adapter exactly as before.
+        adapter = SessionGuardedAdapter(inner, session) if is_equity else inner
+
+        # Public client drives market data. Crypto uses a keyless public client;
+        # Alpaca's data API requires auth, so build_public_ccxt_client sources an
+        # Alpaca data key from the environment for that venue.
+        mark_sink = paper_adapter.update_mark if paper_adapter is not None else None
         bars = CcxtBarSource(
             self._public_client_factory(exchange),
             symbol=params.symbol,
@@ -112,7 +134,13 @@ class ProductionLauncher:
             publisher=self._publisher,
             session_factory=self._sessions,
         )
-        return LaunchPlan(strategy=strategy, bars=bars, router=router)
+        return LaunchPlan(
+            strategy=strategy,
+            bars=bars,
+            router=router,
+            session=session if is_equity else None,
+            max_mark_age_ms=_EQUITY_MAX_MARK_AGE_MS if is_equity else None,
+        )
 
     def _build_live_adapter(self, exchange: str, request: StartBotRequest) -> CcxtExchangeAdapter:
         if not self._allow_live:

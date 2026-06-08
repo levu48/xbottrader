@@ -1,4 +1,4 @@
-import { StrategyConfig } from '@xbt/shared';
+import { CryptoSymbol, EquitySymbol, StrategyConfig, assetClassFor } from '@xbt/shared';
 import { z } from 'zod';
 import { InternalAuthSigner } from './internal-auth.js';
 
@@ -21,14 +21,31 @@ export const EncryptedKeyEnvelope = z.object({
 });
 export type EncryptedKeyEnvelope = z.infer<typeof EncryptedKeyEnvelope>;
 
-export const StartBotRequest = z.object({
-  strategy: StrategyConfig,
-  mode: z.enum(['paper', 'live']).default('paper'),
-  // ccxt venue id (e.g. 'binance'); drives the live client + market-data feed.
-  exchange: z.string().optional(),
-  risk: RiskLimits.optional(),
-  credentials: EncryptedKeyEnvelope.optional(),
-});
+export const StartBotRequest = z
+  .object({
+    strategy: StrategyConfig,
+    mode: z.enum(['paper', 'live']).default('paper'),
+    // Venue id. Crypto: ccxt venue ('binance', 'coinbase'). US equities: 'alpaca'.
+    // Drives the adapter, market-data feed, and market-hours session.
+    exchange: z.string().optional(),
+    risk: RiskLimits.optional(),
+    credentials: EncryptedKeyEnvelope.optional(),
+  })
+  .superRefine((req, ctx) => {
+    // The symbol format must match the venue's asset class. Undefined exchange
+    // defaults to crypto (the Bot Engine defaults to 'binance').
+    const isEquity = assetClassFor(req.exchange ?? 'binance') === 'us_equity';
+    const schema = isEquity ? EquitySymbol : CryptoSymbol;
+    if (!schema.safeParse(req.strategy.symbol).success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['strategy', 'symbol'],
+        message: isEquity
+          ? `'${req.strategy.symbol}' is not a valid equity ticker (e.g. AAPL)`
+          : `'${req.strategy.symbol}' is not a valid crypto pair (e.g. BTC/USDT)`,
+      });
+    }
+  });
 export type StartBotRequest = z.infer<typeof StartBotRequest>;
 
 export const BotStateResponse = z.object({

@@ -8,6 +8,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from xbt_core.exchanges.session_guard import SessionGuardedAdapter
+from xbt_core.market.session import UsEquitySession
+
 from app.api.schemas import DcaParams, EncryptedKeyEnvelope, StartBotRequest
 from app.db.models import BotConfigRow
 from app.events.publisher import EventPublisher
@@ -44,6 +47,17 @@ def _dca_request(mode: str = "paper", credentials: EncryptedKeyEnvelope | None =
         ),
         mode=mode,  # type: ignore[arg-type]
         exchange="binance",
+        credentials=credentials,
+    )
+
+
+def _alpaca_request(mode: str = "paper", credentials: EncryptedKeyEnvelope | None = None) -> StartBotRequest:
+    return StartBotRequest(
+        strategy=DcaParams(
+            strategy_type="dca", symbol="AAPL", quote_amount=Decimal("50"), interval_minutes=1
+        ),
+        mode=mode,  # type: ignore[arg-type]
+        exchange="alpaca",
         credentials=credentials,
     )
 
@@ -127,3 +141,45 @@ async def test_live_mode_decrypts_into_ccxt_factory(
     assert captured["creds"].secret == "test-secret"
     # Plaintext must not linger on the launcher itself.
     assert "test-secret" not in repr(launcher.__dict__)
+    # Crypto venue → bare adapter, no market-hours session.
+    assert plan.session is None
+
+
+# --------------------------------------------------------------------------- #
+# Alpaca (equities)
+# --------------------------------------------------------------------------- #
+async def test_alpaca_paper_uses_usd_config_and_market_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    launcher, _ = _make_launcher(session_factory)
+    plan = await launcher.launch(bot_id="b1", user_id="u1", request=_alpaca_request("paper"))
+
+    # Paper adapter wrapped in the market-hours guard; USD, commission-free.
+    adapter = plan.router._adapter  # type: ignore[attr-defined]
+    assert isinstance(adapter, SessionGuardedAdapter)
+    inner = adapter._inner  # type: ignore[attr-defined]
+    assert isinstance(inner, PaperExchangeAdapter)
+    assert inner._cfg.fee_currency == "USD"  # type: ignore[attr-defined]
+    assert inner._cfg.fee_bps == 0  # type: ignore[attr-defined]
+    # An equity bot carries a US-equity session into the plan.
+    assert isinstance(plan.session, UsEquitySession)
+    assert plan.max_mark_age_ms is not None
+
+    async with session_factory() as s:
+        rows = list((await s.execute(select(BotConfigRow))).scalars().all())
+    assert rows[0].exchange == "alpaca"
+
+
+async def test_alpaca_live_wraps_ccxt_in_session_guard(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    launcher, captured = _make_launcher(session_factory, allow_live=True)
+    creds = _encrypt_creds("ak", "sk")
+
+    plan = await launcher.launch(bot_id="b1", user_id="u1", request=_alpaca_request("live", creds))
+
+    adapter = plan.router._adapter  # type: ignore[attr-defined]
+    assert isinstance(adapter, SessionGuardedAdapter)
+    assert isinstance(adapter._inner, CcxtExchangeAdapter)  # type: ignore[attr-defined]
+    assert captured["exchange"] == "alpaca"
+    assert isinstance(plan.session, UsEquitySession)
