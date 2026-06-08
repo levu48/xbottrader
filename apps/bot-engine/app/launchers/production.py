@@ -23,10 +23,12 @@ from ..api.launcher import LaunchPlan
 from ..api.schemas import StartBotRequest
 from ..db.repositories import BotConfigRepo
 from ..events.publisher import EventPublisher
+from ..exchanges.alpaca_data import build_alpaca_stock_data_client
 from ..exchanges.ccxt_adapter import CcxtExchangeAdapter
 from ..exchanges.ccxt_live import (
     CcxtBarSource,
     ExchangeCredentials,
+    MarketDataClient,
     build_ccxt_client,
     build_public_ccxt_client,
 )
@@ -41,6 +43,8 @@ _EQUITY_MAX_MARK_AGE_MS = 15 * 60 * 1000
 
 CcxtClientFactory = Callable[[str, ExchangeCredentials], Any]
 PublicClientFactory = Callable[[str], Any]
+# Builds the market-data client for an equity venue (Alpaca stock bars over REST).
+EquityDataClientFactory = Callable[[str], MarketDataClient]
 
 
 class ProductionLauncher:
@@ -53,6 +57,7 @@ class ProductionLauncher:
         allow_live: bool = False,
         ccxt_client_factory: CcxtClientFactory = build_ccxt_client,
         public_client_factory: PublicClientFactory = build_public_ccxt_client,
+        equity_data_client_factory: EquityDataClientFactory = build_alpaca_stock_data_client,
         timeframe: str = "1m",
         poll_interval_s: float = 2.0,
     ) -> None:
@@ -62,6 +67,7 @@ class ProductionLauncher:
         self._allow_live = allow_live
         self._ccxt_client_factory = ccxt_client_factory
         self._public_client_factory = public_client_factory
+        self._equity_data_client_factory = equity_data_client_factory
         self._timeframe = timeframe
         self._poll_interval_s = poll_interval_s
 
@@ -116,12 +122,18 @@ class ProductionLauncher:
         # uses the bare adapter exactly as before.
         adapter = SessionGuardedAdapter(inner, session) if is_equity else inner
 
-        # Public client drives market data. Crypto uses a keyless public client;
-        # Alpaca's data API requires auth, so build_public_ccxt_client sources an
-        # Alpaca data key from the environment for that venue.
+        # Market-data client drives the bar feed. Crypto uses a keyless ccxt
+        # public client. Equities can't: ccxt's alpaca.fetch_ohlcv only serves
+        # *crypto* bars, so we poll Alpaca's stock bars REST API directly (same
+        # MarketDataClient interface, auth'd with the server-level data keys).
+        data_client = (
+            self._equity_data_client_factory(exchange)
+            if is_equity
+            else self._public_client_factory(exchange)
+        )
         mark_sink = paper_adapter.update_mark if paper_adapter is not None else None
         bars = CcxtBarSource(
-            self._public_client_factory(exchange),
+            data_client,
             symbol=params.symbol,
             timeframe=self._timeframe,
             poll_interval_s=self._poll_interval_s,

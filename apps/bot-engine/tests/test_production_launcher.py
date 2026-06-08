@@ -75,13 +75,22 @@ def _make_launcher(
         captured["creds"] = creds
         return object()  # CcxtExchangeAdapter only stores it; no calls at build time
 
+    def public_factory(exchange: str) -> DummyPublicClient:
+        captured["data_venue"] = ("crypto", exchange)
+        return DummyPublicClient()
+
+    def equity_factory(exchange: str) -> DummyPublicClient:
+        captured["data_venue"] = ("equity", exchange)
+        return DummyPublicClient()
+
     launcher = ProductionLauncher(
         EventPublisher(FakeRedis()),
         session_factory,
         EnvelopeCipher(TEST_KEK),
         allow_live=allow_live,
         ccxt_client_factory=ccxt_factory or default_ccxt_factory,
-        public_client_factory=lambda exchange: DummyPublicClient(),
+        public_client_factory=public_factory,
+        equity_data_client_factory=equity_factory,
     )
     return launcher, captured
 
@@ -96,11 +105,13 @@ def _encrypt_creds(api_key: str, secret: str) -> EncryptedKeyEnvelope:
 async def test_paper_mode_builds_paper_plan_and_persists_config(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    launcher, _ = _make_launcher(session_factory)
+    launcher, captured = _make_launcher(session_factory)
     plan = await launcher.launch(bot_id="b1", user_id="u1", request=_dca_request("paper"))
 
     assert isinstance(plan.bars, CcxtBarSource)
     assert isinstance(plan.router._adapter, PaperExchangeAdapter)  # type: ignore[attr-defined]
+    # Crypto venue → keyless ccxt public client drives the bar feed.
+    assert captured["data_venue"] == ("crypto", "binance")
 
     async with session_factory() as s:
         rows = list((await s.execute(select(BotConfigRow))).scalars().all())
@@ -151,7 +162,7 @@ async def test_live_mode_decrypts_into_ccxt_factory(
 async def test_alpaca_paper_uses_usd_config_and_market_session(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    launcher, _ = _make_launcher(session_factory)
+    launcher, captured = _make_launcher(session_factory)
     plan = await launcher.launch(bot_id="b1", user_id="u1", request=_alpaca_request("paper"))
 
     # Paper adapter wrapped in the market-hours guard; USD, commission-free.
@@ -164,6 +175,9 @@ async def test_alpaca_paper_uses_usd_config_and_market_session(
     # An equity bot carries a US-equity session into the plan.
     assert isinstance(plan.session, UsEquitySession)
     assert plan.max_mark_age_ms is not None
+    # Equity venue → Alpaca stock-bars client drives the feed (NOT ccxt), since
+    # ccxt's alpaca.fetch_ohlcv only serves crypto bars.
+    assert captured["data_venue"] == ("equity", "alpaca")
 
     async with session_factory() as s:
         rows = list((await s.execute(select(BotConfigRow))).scalars().all())

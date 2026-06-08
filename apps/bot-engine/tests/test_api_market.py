@@ -197,11 +197,12 @@ def test_alpaca_stock_bars_parses_response(monkeypatch: Any) -> None:
         status_code = 200
 
         def json(self) -> dict[str, Any]:
+            # Alpaca returns newest-first for sort=desc; the fetcher reverses it.
             return {
                 "symbol": "AAPL",
                 "bars": [
-                    {"t": "2023-11-14T20:00:00Z", "o": 190.0, "h": 191.0, "l": 189.5, "c": 190.5, "v": 1000},
                     {"t": "2023-11-14T20:01:00Z", "o": 190.5, "h": 192.0, "l": 190.0, "c": 191.5, "v": 800},
+                    {"t": "2023-11-14T20:00:00Z", "o": 190.0, "h": 191.0, "l": 189.5, "c": 190.5, "v": 1000},
                 ],
             }
 
@@ -222,9 +223,11 @@ def test_alpaca_stock_bars_parses_response(monkeypatch: Any) -> None:
 
     assert captured["url"].endswith("/v2/stocks/AAPL/bars")
     assert captured["params"]["timeframe"] == "1Min"
+    assert captured["params"]["sort"] == "desc"
     assert captured["headers"]["APCA-API-KEY-ID"] == "k"
-    # First candle: [ts_ms, o, h, l, c, v] with the ISO time → epoch ms.
+    # Returned oldest-first: first candle is the 20:00 bar [ts_ms, o, h, l, c, v].
     assert candles[0] == [1_699_992_000_000.0, 190.0, 191.0, 189.5, 190.5, 1000.0]
+    assert candles[-1][0] == 1_699_992_060_000.0  # 20:01 bar last
     assert len(candles) == 2
 
 

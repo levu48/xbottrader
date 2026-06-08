@@ -14,13 +14,18 @@ Two fetch paths, by asset class:
 
 from __future__ import annotations
 
-import os
-from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from xbt_core.market.session import AssetClass, asset_class_for
 
+# EquityDataError / fetch_alpaca_stock_bars are re-exported here for backwards
+# compatibility (and tests); the implementation lives in the exchanges layer,
+# shared with the live bar feed.
+from ..exchanges.alpaca_data import (  # noqa: F401
+    EquityDataError,
+    fetch_alpaca_stock_bars,
+)
 from ..exchanges.ccxt_live import build_public_ccxt_client
 from .auth import InternalIdentity
 from .bots import internal_identity  # reuse the signed-request dependency
@@ -33,9 +38,6 @@ PublicClientFactory = Callable[[str], Any]
 EquityBarsFetcher = Callable[[str, str, int], Awaitable[list[list[float]]]]
 
 _MAX_LIMIT = 1000
-
-# Our timeframe ids → Alpaca's. Only these are exposed by the dashboard selector.
-_ALPACA_TIMEFRAMES = {"1m": "1Min", "5m": "5Min", "1h": "1Hour", "1d": "1Day"}
 
 
 @router.get("/ohlcv", response_model=OhlcvResponse)
@@ -103,66 +105,3 @@ async def _fetch_equity(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"market data unavailable for {symbol}",
         ) from e
-
-
-class EquityDataError(RuntimeError):
-    """Equity bars couldn't be fetched (missing keys or upstream error).
-
-    The message is surfaced to the dashboard, so keep it user-actionable and
-    free of secrets.
-    """
-
-
-async def fetch_alpaca_stock_bars(
-    symbol: str, timeframe: str, limit: int
-) -> list[list[float]]:
-    """Fetch stock OHLCV from Alpaca's Market Data v2 REST API.
-
-    Uses the server-level data keys. Free Alpaca plans only serve the IEX feed
-    (``feed=iex``), which is sufficient for a chart.
-    """
-    tf = _ALPACA_TIMEFRAMES.get(timeframe)
-    if tf is None:
-        raise ValueError(f"unsupported timeframe {timeframe!r} for equities")
-
-    key = os.environ.get("XBT_ALPACA_DATA_KEY")
-    secret = os.environ.get("XBT_ALPACA_DATA_SECRET")
-    if not key or not secret:
-        raise EquityDataError(
-            "Alpaca market-data keys not configured "
-            "(set XBT_ALPACA_DATA_KEY / XBT_ALPACA_DATA_SECRET)"
-        )
-
-    import httpx
-
-    url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
-    params = {"timeframe": tf, "limit": limit, "feed": "iex", "sort": "asc"}
-    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-    except httpx.HTTPError as e:
-        raise EquityDataError(f"could not reach Alpaca data API for {symbol}") from e
-    if resp.status_code >= 400:
-        raise EquityDataError(
-            f"Alpaca data API returned {resp.status_code} for {symbol}"
-        )
-
-    bars = resp.json().get("bars") or []
-    return [
-        [
-            float(_iso_to_ms(b["t"])),
-            float(b["o"]),
-            float(b["h"]),
-            float(b["l"]),
-            float(b["c"]),
-            float(b["v"]),
-        ]
-        for b in bars
-    ]
-
-
-def _iso_to_ms(t: str) -> int:
-    """RFC-3339 timestamp (``2024-01-02T15:30:00Z``) → epoch milliseconds."""
-    dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-    return int(dt.timestamp() * 1000)
