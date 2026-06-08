@@ -1,6 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CandlestickSeries,
+  createChart,
+  type CandlestickData,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from 'lightweight-charts';
 
 interface IncomingEvent {
   event_type: string;
@@ -315,6 +323,10 @@ export default function DashboardPage() {
       </div>
 
       <div style={card}>
+        <MarketChart exchange={exchange} symbol={symbol} />
+      </div>
+
+      <div style={card}>
         <h3 style={{ marginTop: 0 }}>
           {symbol} — fill price{' '}
           <span style={{ color: '#999', fontWeight: 400, fontSize: 13 }}>(live)</span>
@@ -396,6 +408,124 @@ function PriceChart({ values }: { values: number[] }) {
         <span style={{ color: stroke, fontWeight: 600 }}>last {last.toFixed(2)}</span>
         <span>high {max.toFixed(2)}</span>
       </div>
+    </div>
+  );
+}
+
+// Live OHLCV candlestick chart for the selected symbol/exchange, rendered with
+// lightweight-charts. Fetches on symbol/exchange/timeframe change and polls
+// every 15s so the latest candle stays fresh. Market data is public, served by
+// the Bot Engine via the gateway's /v1/market/ohlcv proxy.
+type Timeframe = '1m' | '5m' | '1h' | '1d';
+const TIMEFRAMES: Timeframe[] = ['1m', '5m', '1h', '1d'];
+const POLL_MS = 15_000;
+
+function MarketChart({ exchange, symbol }: { exchange: string; symbol: string }) {
+  const [timeframe, setTimeframe] = useState<Timeframe>('1m');
+  const [error, setError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+
+  const valid = symbolValid(exchange, symbol);
+
+  // Create the chart + candlestick series once, and keep its width in sync.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const chart = createChart(el, {
+      height: 260,
+      layout: { background: { color: '#fff' }, textColor: '#374151' },
+      grid: { vertLines: { color: '#f3f4f6' }, horzLines: { color: '#f3f4f6' } },
+      rightPriceScale: { borderColor: '#e5e5e5' },
+      timeScale: { borderColor: '#e5e5e5', timeVisible: true, secondsVisible: false },
+    });
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#16a34a',
+      downColor: '#dc2626',
+      wickUpColor: '#16a34a',
+      wickDownColor: '#dc2626',
+      borderVisible: false,
+    });
+    chartRef.current = chart;
+    seriesRef.current = series;
+    const onResize = () => chart.applyOptions({ width: el.clientWidth });
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []);
+
+  // Load + poll candles. Re-runs whenever the symbol/exchange/timeframe changes;
+  // fitContent only on the first load of each run so polling doesn't fight a
+  // user's zoom/pan.
+  useEffect(() => {
+    if (!valid) {
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    let first = true;
+    const load = async () => {
+      try {
+        const qs = new URLSearchParams({ exchange, symbol, timeframe, limit: '200' });
+        const res = await fetch(`/v1/market/ohlcv?${qs.toString()}`);
+        if (!res.ok) {
+          if (!cancelled) setError('Market data unavailable for this symbol.');
+          return;
+        }
+        const data = (await res.json()) as { candles: number[][] };
+        if (cancelled || !seriesRef.current) return;
+        const bars: CandlestickData<Time>[] = data.candles.map((c) => ({
+          time: (c[0]! / 1000) as Time,
+          open: c[1]!,
+          high: c[2]!,
+          low: c[3]!,
+          close: c[4]!,
+        }));
+        seriesRef.current.setData(bars);
+        if (first) {
+          chartRef.current?.timeScale().fitContent();
+          first = false;
+        }
+        setError(null);
+      } catch {
+        if (!cancelled) setError('Failed to load market data.');
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [exchange, symbol, timeframe, valid]);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+          {symbol} — market (OHLCV){' '}
+          <span style={{ color: '#999', fontWeight: 400, fontSize: 13 }}>· {exchange}</span>
+        </h3>
+        <select
+          style={{ ...input, width: 70, marginRight: 0 }}
+          value={timeframe}
+          onChange={(e) => setTimeframe(e.target.value as Timeframe)}
+        >
+          {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+        </select>
+      </div>
+      {!valid ? (
+        <p style={{ color: '#666', margin: 0 }}>Enter a valid {symbolHint(exchange)} to see the chart.</p>
+      ) : error ? (
+        <p style={{ color: '#dc2626', margin: 0, fontSize: 13 }}>{error}</p>
+      ) : null}
+      <div ref={containerRef} style={{ width: '100%', ...(valid ? {} : { display: 'none' }) }} />
     </div>
   );
 }

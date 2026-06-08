@@ -60,6 +60,16 @@ export const KillAllResponse = z.object({
 });
 export type KillAllResponse = z.infer<typeof KillAllResponse>;
 
+// Public OHLCV candles for the dashboard chart. Each candle is a ccxt row
+// [ts_ms, open, high, low, close, volume]; mirrors OhlcvResponse in the Bot Engine.
+export const OhlcvResponse = z.object({
+  exchange: z.string(),
+  symbol: z.string(),
+  timeframe: z.string(),
+  candles: z.array(z.array(z.number())),
+});
+export type OhlcvResponse = z.infer<typeof OhlcvResponse>;
+
 export class BotEngineError extends Error {
   constructor(
     public readonly status: number,
@@ -108,6 +118,26 @@ export class BotEngineClient {
     return this.#request('GET', `/bots/${args.botId}`, args.userId, '');
   }
 
+  /** Public OHLCV candles for a symbol — drives the dashboard market chart. */
+  async getOhlcv(args: {
+    userId: string;
+    exchange: string;
+    symbol: string;
+    timeframe: string;
+    limit: number;
+  }): Promise<OhlcvResponse> {
+    // The HMAC signs only the path (no query string — the Bot Engine verifies
+    // against request.url.path), so the params ride as an unsigned query suffix.
+    const query = new URLSearchParams({
+      exchange: args.exchange,
+      symbol: args.symbol,
+      timeframe: args.timeframe,
+      limit: String(args.limit),
+    }).toString();
+    const text = await this.#send('GET', '/market/ohlcv', args.userId, '', query);
+    return OhlcvResponse.parse(JSON.parse(text));
+  }
+
   async #post(path: string, userId: string, body: unknown): Promise<BotStateResponse> {
     const bodyStr = body === undefined ? '' : JSON.stringify(body);
     return this.#request('POST', path, userId, bodyStr);
@@ -123,12 +153,21 @@ export class BotEngineClient {
     return BotStateResponse.parse(JSON.parse(text));
   }
 
-  async #send(method: string, path: string, userId: string, body: string): Promise<string> {
+  async #send(
+    method: string,
+    path: string,
+    userId: string,
+    body: string,
+    query = '',
+  ): Promise<string> {
     // Sign over the (possibly empty) body, but don't attach a body to GET/HEAD —
-    // undici's fetch rejects "GET/HEAD with body", even an empty string.
+    // undici's fetch rejects "GET/HEAD with body", even an empty string. The
+    // query string is appended to the URL but excluded from the signature, since
+    // the Bot Engine verifies against request.url.path (no query).
     const headers = this.signer.sign({ method, path, userId, body });
     const hasBody = method !== 'GET' && method !== 'HEAD';
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const url = query ? `${this.baseUrl}${path}?${query}` : `${this.baseUrl}${path}`;
+    const res = await this.fetchImpl(url, {
       method,
       headers: { ...headers, 'content-type': 'application/json' },
       ...(hasBody ? { body } : {}),

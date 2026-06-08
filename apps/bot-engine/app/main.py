@@ -14,10 +14,14 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from redis.asyncio import Redis as AsyncRedis
 
+from typing import Any, Callable
+
 from .api.auth import InternalAuthenticator
 from .api.bots import router as bots_router
 from .api.launcher import BotLauncher
+from .api.market import router as market_router
 from .events.publisher import EventPublisher
+from .exchanges.ccxt_live import build_public_ccxt_client
 from .runtime.supervisor import Supervisor
 
 
@@ -26,6 +30,7 @@ def create_app(
     launcher: BotLauncher,
     publisher: EventPublisher,
     internal_auth: InternalAuthenticator,
+    public_client_factory: Callable[[str], Any] = build_public_ccxt_client,
 ) -> FastAPI:
     supervisor = Supervisor(publisher)
 
@@ -39,7 +44,9 @@ def create_app(
     app.state.supervisor = supervisor
     app.state.launcher = launcher
     app.state.internal_auth = internal_auth
+    app.state.public_client_factory = public_client_factory
     app.include_router(bots_router)
+    app.include_router(market_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

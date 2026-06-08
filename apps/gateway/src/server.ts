@@ -16,6 +16,7 @@ import { DrizzleAuditLog, DrizzleKeyStore, DrizzleUserStore } from './db/repos.j
 import { registerKeysRoutes } from './keys/routes.js';
 import { registerAiRoutes } from './routes/ai.js';
 import { registerBotsRoutes } from './routes/bots.js';
+import { registerMarketRoutes } from './routes/market.js';
 import { EnvelopeCipher } from './security/keys.js';
 import { EventStreamConsumer } from './ws/consumer.js';
 import { IoredisStreamReader } from './ws/redis-reader.js';
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
   await registerAuthRoutes(app, { users, sessions, audit });
   await registerKeysRoutes(app, { keys, cipher, requireUser });
   await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users });
+  await registerMarketRoutes(app, { bot: botClient, requireUser });
   await registerAiRoutes(app, { ai: aiClient, requireUser });
 
   app.get('/healthz', async () => ({ ok: true }));

@@ -115,6 +115,50 @@ describe('BotEngineClient', () => {
     expect(call.init.headers[HEADER_SIG]).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('sends OHLCV query params on the URL but signs only the bare path', async () => {
+    const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
+    const client = new BotEngineClient(
+      'http://upstream:5001',
+      signer,
+      fakeFetch(
+        200,
+        '{"exchange":"binance","symbol":"BTC/USDT","timeframe":"1m","candles":[[1,2,3,0.5,2.5,9]]}',
+        captured,
+      ),
+    );
+    const res = await client.getOhlcv({
+      userId: 'u1',
+      exchange: 'binance',
+      symbol: 'BTC/USDT',
+      timeframe: '1m',
+      limit: 200,
+    });
+    expect(res.candles).toHaveLength(1);
+
+    const call = captured.calls[0]!;
+    const url = new URL(call.url);
+    expect(url.pathname).toBe('/market/ohlcv');
+    expect(url.searchParams.get('symbol')).toBe('BTC/USDT');
+    expect(url.searchParams.get('limit')).toBe('200');
+    expect(call.init.method).toBe('GET');
+    expect(call.init.body).toBeUndefined();
+
+    // The signature must cover the bare path (the Bot Engine verifies against
+    // request.url.path, which excludes the query) — recompute at the same ts.
+    const ts = Number(call.init.headers[HEADER_TS]);
+    const expected = signer.sign({ method: 'GET', path: '/market/ohlcv', userId: 'u1', body: '', ts });
+    expect(call.init.headers[HEADER_SIG]).toBe(expected[HEADER_SIG]);
+    // ...and NOT the path-with-query, proving the query is excluded.
+    const withQuery = signer.sign({
+      method: 'GET',
+      path: '/market/ohlcv?exchange=binance&symbol=BTC/USDT&timeframe=1m&limit=200',
+      userId: 'u1',
+      body: '',
+      ts,
+    });
+    expect(call.init.headers[HEADER_SIG]).not.toBe(withQuery[HEADER_SIG]);
+  });
+
   it('parses the kill-all response shape', async () => {
     const captured = { calls: [] as { url: string; init: Parameters<FetchLike>[1] }[] };
     const client = new BotEngineClient(

@@ -37,6 +37,25 @@ _CRYPTO_SYMBOL_RE = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
 _EQUITY_SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 
 
+def validate_symbol(exchange: str, symbol: str) -> None:
+    """Raise ``ValueError`` unless ``symbol`` matches ``exchange``'s asset class.
+
+    Shared by ``StartBotRequest`` and the market-data endpoint so the live and
+    OHLCV paths accept identical symbols.
+    """
+    if asset_class_for(exchange) is AssetClass.US_EQUITY:
+        if not _EQUITY_SYMBOL_RE.match(symbol):
+            raise ValueError(
+                f"{symbol!r} is not a valid equity ticker for {exchange!r} "
+                "(expected e.g. AAPL)"
+            )
+    elif not _CRYPTO_SYMBOL_RE.match(symbol):
+        raise ValueError(
+            f"{symbol!r} is not a valid crypto pair for {exchange!r} "
+            "(expected BASE/QUOTE, e.g. BTC/USDT)"
+        )
+
+
 class RiskLimits(BaseModel):
     """Per-bot risk controls. Enforced by the Supervisor's circuit breaker.
 
@@ -75,18 +94,7 @@ class StartBotRequest(BaseModel):
 
     @model_validator(mode="after")
     def _symbol_matches_asset_class(self) -> "StartBotRequest":
-        symbol = self.strategy.symbol
-        if asset_class_for(self.exchange) is AssetClass.US_EQUITY:
-            if not _EQUITY_SYMBOL_RE.match(symbol):
-                raise ValueError(
-                    f"{symbol!r} is not a valid equity ticker for {self.exchange!r} "
-                    "(expected e.g. AAPL)"
-                )
-        elif not _CRYPTO_SYMBOL_RE.match(symbol):
-            raise ValueError(
-                f"{symbol!r} is not a valid crypto pair for {self.exchange!r} "
-                "(expected BASE/QUOTE, e.g. BTC/USDT)"
-            )
+        validate_symbol(self.exchange, self.strategy.symbol)
         return self
 
 
@@ -98,3 +106,17 @@ class BotStateResponse(BaseModel):
 
 class KillAllResponse(BaseModel):
     killed: list[str]
+
+
+class OhlcvResponse(BaseModel):
+    """Public OHLCV candles for a symbol, newest-last.
+
+    Each candle is a ccxt row ``[ts_ms, open, high, low, close, volume]``. Kept
+    as a flat list of floats (not a model) so the payload stays compact and the
+    front-end can hand it straight to lightweight-charts.
+    """
+
+    exchange: str
+    symbol: str
+    timeframe: str
+    candles: list[list[float]]
