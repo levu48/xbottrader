@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 from xbt_core.exchanges.paper import PaperConfig
 from xbt_core.strategies.base import Bar
+from xbt_core.strategy_config import AiSignalParams
 
 from app.api.schemas import DcaParams, MaCrossoverParams
 from app.backtest.engine import run_backtest
@@ -31,6 +33,20 @@ async def test_dca_zero_cost_flat_price_preserves_equity() -> None:
     assert res.final_equity == Decimal("1000")
     assert res.total_return_pct == Decimal("0")
     assert res.max_drawdown_pct == Decimal("0")
+
+
+async def test_ai_signal_is_rejected_not_backtestable() -> None:
+    # ai_signal decisions come from a live LLM; a backtest can't replay them, so
+    # run_backtest must reject rather than emit a misleading flat curve.
+    cfg = AiSignalParams(
+        strategy_type="ai_signal",
+        symbol="BTC/USDT",
+        quote_amount=Decimal("100"),
+        decision_interval_minutes=60,
+    )
+    bars = [_bar(i * 60_000, "100") for i in range(3)]
+    with pytest.raises(ValueError, match="not backtestable"):
+        await run_backtest(strategy_config=cfg, bars=bars, starting_cash=Decimal("1000"))
 
 
 async def test_dca_fees_drag_equity_below_start() -> None:
