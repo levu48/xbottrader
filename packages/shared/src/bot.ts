@@ -73,11 +73,24 @@ export const CustomRulesStrategy = z.object({
   rules: z.array(RuleSpec).min(1),
 });
 
+// AI-signal strategy: an LLM decides buy/sell/hold on an interval. Non-deterministic
+// and not backtestable — sizing stays here (quote_amount) so the model never sizes.
+export const AiSignalStrategy = z.object({
+  strategy_type: z.literal('ai_signal'),
+  symbol: Symbol_,
+  quote_amount: Decimal,
+  decision_interval_minutes: z.number().int().min(1),
+  lookback_bars: z.number().int().min(2).max(500).default(50),
+  guidance: z.string().max(2000).optional(),
+  model: z.string().optional(),
+});
+
 export const StrategyConfig = z.discriminatedUnion('strategy_type', [
   DcaStrategy,
   GridStrategy,
   MaCrossoverStrategy,
   CustomRulesStrategy,
+  AiSignalStrategy,
 ]);
 export type StrategyConfig = z.infer<typeof StrategyConfig>;
 
