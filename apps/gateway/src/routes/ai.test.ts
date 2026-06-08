@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
-import type { RequireUser } from '../auth/middleware.js';
+import type { RequireSubscription, RequireUser } from '../auth/middleware.js';
 import { AiEngineClient } from '../clients/ai.js';
 import { InternalAuthSigner } from '../clients/internal-auth.js';
 import { registerAiRoutes } from './ai.js';
@@ -11,8 +11,20 @@ const devRequireUser: RequireUser = async (req, reply) => {
   else await reply.status(401).send({ error: 'unauthenticated' });
 };
 
-const reg = (app: FastifyInstance, ai: AiEngineClient): Promise<void> =>
-  registerAiRoutes(app, { ai, requireUser: devRequireUser });
+// Active by default so the forwarding tests pass through; the gate is tested
+// explicitly below with active=false.
+const devRequireSubscription =
+  (active = true): RequireSubscription =>
+  async (_req, reply) => {
+    if (!active) await reply.status(403).send({ error: 'subscription_required' });
+  };
+
+const reg = (app: FastifyInstance, ai: AiEngineClient, subActive = true): Promise<void> =>
+  registerAiRoutes(app, {
+    ai,
+    requireUser: devRequireUser,
+    requireSubscription: devRequireSubscription(subActive),
+  });
 
 const makeClient = (
   responder: (path: string, init: { body?: string }) => { status: number; body: string },
@@ -142,6 +154,48 @@ describe('ai routes', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(JSON.parse(res.body).upstream).toBe('could not author a strategy');
+    await app.close();
+  });
+
+  it('blocks copilot chat without an active subscription', async () => {
+    const client = makeClient(() => ({ status: 200, body: '{}' }));
+    const app = Fastify();
+    await reg(app, client, false); // no active subscription
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/ai/copilot/chat',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: { messages: [{ role: 'user', content: 'hi' }] },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error).toBe('subscription_required');
+    await app.close();
+  });
+
+  it('leaves backtest free (no subscription required)', async () => {
+    const client = makeClient(() => ({
+      status: 200,
+      body: '{"symbol":"BTC/USDT","bars":5,"stats":{},"equity_curve":[]}',
+    }));
+    const app = Fastify();
+    await reg(app, client, false); // no active subscription
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/ai/backtest',
+      headers: { 'x-dev-user': 'u1', 'content-type': 'application/json' },
+      payload: {
+        strategy: {
+          strategy_type: 'ma_crossover',
+          symbol: 'BTC/USDT',
+          fast_period: 10,
+          slow_period: 30,
+          position_quote: '1000',
+        },
+        timeframe: '1h',
+        limit: 500,
+      },
+    });
+    expect(res.statusCode).toBe(200);
     await app.close();
   });
 

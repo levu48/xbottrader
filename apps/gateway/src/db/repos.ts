@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { EncryptedEnvelope } from '../security/keys.js';
 import type { Db } from './client.js';
-import { apiKeysCiphertext, auditLogAuth, users } from './schema.js';
+import { apiKeysCiphertext, auditLogAuth, subscriptions, users } from './schema.js';
 
 export interface UserRecord {
   id: string;
@@ -123,5 +123,96 @@ export class DrizzleAuditLog implements AuditLog {
 
   async record(action: string, userId: string | null, ip: string | null): Promise<void> {
     await this.db.insert(auditLogAuth).values({ action, userId, ip });
+  }
+}
+
+// Stripe statuses that grant entitlement. trialing included so a trial unlocks
+// features; past_due/canceled/etc. do not.
+const ACTIVE_STATUSES = new Set(['active', 'trialing']);
+
+export interface SubscriptionRecord {
+  userId: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string | null;
+  status: string | null;
+  priceId: string | null;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+}
+
+// Fields synced from a Stripe subscription/checkout event.
+export interface SubscriptionUpdate {
+  stripeSubscriptionId?: string | null;
+  status?: string | null;
+  priceId?: string | null;
+  currentPeriodEnd?: Date | null;
+  cancelAtPeriodEnd?: boolean;
+}
+
+export interface SubscriptionStore {
+  getByUser(userId: string): Promise<SubscriptionRecord | null>;
+  getByCustomerId(customerId: string): Promise<SubscriptionRecord | null>;
+  // Create the row on first checkout (links user ↔ Stripe customer).
+  ensureCustomer(userId: string, stripeCustomerId: string): Promise<void>;
+  // Apply a Stripe-sourced update, keyed by the Stripe customer id (the only id
+  // present on every webhook event).
+  upsertFromStripe(stripeCustomerId: string, update: SubscriptionUpdate): Promise<void>;
+  isActive(userId: string): Promise<boolean>;
+}
+
+function toSub(r: typeof subscriptions.$inferSelect): SubscriptionRecord {
+  return {
+    userId: r.userId,
+    stripeCustomerId: r.stripeCustomerId,
+    stripeSubscriptionId: r.stripeSubscriptionId,
+    status: r.status,
+    priceId: r.priceId,
+    currentPeriodEnd: r.currentPeriodEnd ? r.currentPeriodEnd.toISOString() : null,
+    cancelAtPeriodEnd: r.cancelAtPeriodEnd,
+  };
+}
+
+export class DrizzleSubscriptionStore implements SubscriptionStore {
+  constructor(private readonly db: Db) {}
+
+  async getByUser(userId: string): Promise<SubscriptionRecord | null> {
+    const r = await this.db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+    return r[0] ? toSub(r[0]) : null;
+  }
+
+  async getByCustomerId(customerId: string): Promise<SubscriptionRecord | null> {
+    const r = await this.db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.stripeCustomerId, customerId))
+      .limit(1);
+    return r[0] ? toSub(r[0]) : null;
+  }
+
+  async ensureCustomer(userId: string, stripeCustomerId: string): Promise<void> {
+    await this.db
+      .insert(subscriptions)
+      .values({ userId, stripeCustomerId })
+      .onConflictDoNothing({ target: subscriptions.userId });
+  }
+
+  async upsertFromStripe(stripeCustomerId: string, update: SubscriptionUpdate): Promise<void> {
+    await this.db
+      .update(subscriptions)
+      .set({ ...update, updatedAt: new Date() })
+      .where(eq(subscriptions.stripeCustomerId, stripeCustomerId));
+  }
+
+  async isActive(userId: string): Promise<boolean> {
+    const r = await this.db
+      .select({ status: subscriptions.status })
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+    return r[0]?.status != null && ACTIVE_STATUSES.has(r[0].status);
   }
 }

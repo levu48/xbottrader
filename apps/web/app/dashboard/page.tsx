@@ -89,6 +89,19 @@ function displayBot(id: string): string {
   return i === -1 ? id : id.slice(i + 1);
 }
 
+// Turn the gateway's typed start errors into actionable guidance.
+function explainStartError(text: string): string {
+  try {
+    const err = (JSON.parse(text) as { error?: string }).error;
+    if (err === 'subscription_required') return 'a subscription is required — see Billing.';
+    if (err === '2fa_required_for_live') return 'enable 2FA in Settings for live trading.';
+    if (err === 'no_api_key_for_exchange') return 'no API key stored for this exchange — add one in Settings.';
+  } catch {
+    /* fall through to raw text */
+  }
+  return text;
+}
+
 const card: React.CSSProperties = { border: '1px solid #e5e5e5', borderRadius: 8, padding: 16, marginBottom: 16 };
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 6, marginRight: 8, fontSize: 14 };
 const btn: React.CSSProperties = { padding: '6px 12px', border: '1px solid #2563eb', background: '#2563eb', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
@@ -128,15 +141,42 @@ export default function DashboardPage() {
   const [authorDesc, setAuthorDesc] = useState('');
   const [authoring, setAuthoring] = useState(false);
   const [authorNote, setAuthorNote] = useState<string | null>(null);
+  // Paper vs live, and the entitlements that gate live: an active subscription,
+  // 2FA, and a stored key for the chosen exchange.
+  const [mode, setMode] = useState<'paper' | 'live'>('paper');
+  const [billingActive, setBillingActive] = useState(false);
+  const [keyExchanges, setKeyExchanges] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Auth gate.
+  // Auth gate. Also load entitlement (billing) + which exchanges have a stored
+  // key, so the live-mode toggle can enable itself only when usable.
   useEffect(() => {
     fetch('/v1/auth/me').then(async (r) => {
-      if (!r.ok) window.location.assign('/login');
-      else setMe(await r.json());
+      if (!r.ok) {
+        window.location.assign('/login');
+        return;
+      }
+      setMe(await r.json());
+      fetch('/v1/billing/status')
+        .then((b) => (b.ok ? b.json() : { active: false }))
+        .then((b) => setBillingActive(Boolean(b.active)))
+        .catch(() => {});
+      fetch('/v1/keys')
+        .then((k) => (k.ok ? k.json() : { keys: [] }))
+        .then((k: { keys?: { exchange: string }[] }) =>
+          setKeyExchanges(new Set((k.keys ?? []).map((x) => x.exchange))),
+        )
+        .catch(() => {});
     });
   }, []);
+
+  // Don't leave 'live' selected if it's no longer permitted (e.g. the user
+  // switched to an exchange without a stored key).
+  useEffect(() => {
+    if (mode === 'live' && !(billingActive && me?.totpEnabled && keyExchanges.has(exchange))) {
+      setMode('paper');
+    }
+  }, [mode, billingActive, me, keyExchanges, exchange]);
 
   // Connect the WS once authenticated.
   useEffect(() => {
@@ -206,19 +246,26 @@ export default function DashboardPage() {
       setNotice(`Symbol must be ${symbolHint(exchange)}.`);
       return;
     }
+    if (mode === 'live' && !window.confirm(`Start a LIVE bot on ${exchange}? This places real-money orders.`)) {
+      return;
+    }
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
       strategy: buildStrategy(),
-      mode: 'paper',
+      mode,
       exchange,
     });
-    setNotice(r.ok ? `started ${botId} (${strategyType} on ${exchange})` : `start failed: ${r.text}`);
-  }, [api, botId, exchange, symbol, strategyType, buildStrategy]);
+    setNotice(r.ok ? `started ${botId} (${strategyType} on ${exchange}, ${mode})` : `start failed: ${explainStartError(r.text)}`);
+  }, [api, botId, exchange, symbol, strategyType, buildStrategy, mode]);
 
   // Ask the AI Engine to author a custom_rules strategy from a plain-English
   // description, then load it into the RuleBuilder so the user can review/edit
   // before starting — nothing trades until they hit Start.
   const generateRules = useCallback(async () => {
     setAuthorNote(null);
+    if (!billingActive) {
+      setAuthorNote('AI strategy authoring is a paid feature — subscribe on the Billing page to use it.');
+      return;
+    }
     if (!authorDesc.trim()) {
       setAuthorNote('Describe the strategy first.');
       return;
@@ -246,7 +293,7 @@ export default function DashboardPage() {
     } catch {
       setAuthorNote('Could not parse the generated strategy.');
     }
-  }, [api, authorDesc, exchange, symbol]);
+  }, [api, authorDesc, exchange, symbol, billingActive]);
 
   const killBot = useCallback(async (id: string) => {
     const r = await api(`/v1/bots/${encodeURIComponent(id)}/kill`);
@@ -276,6 +323,17 @@ export default function DashboardPage() {
     return { fills, summary: { count: fills.length, position, fees, lastPrice, equity: position * lastPrice - cashOut } };
   }, [events]);
 
+  // Live trading requires an active subscription, 2FA, and a stored key for the
+  // selected exchange. Compute readiness + the first blocking reason for the UI.
+  const liveReady = billingActive && !!me?.totpEnabled && keyExchanges.has(exchange);
+  const liveBlockReason = !billingActive
+    ? 'Subscribe on Billing to enable live.'
+    : !me?.totpEnabled
+      ? 'Enable 2FA in Settings.'
+      : !keyExchanges.has(exchange)
+        ? 'Add an API key for this exchange in Settings.'
+        : '';
+
   if (!me) return <main style={{ padding: 32 }}>Loading…</main>;
 
   const statusColor = { open: '#16a34a', connecting: '#ca8a04', closed: '#6b7280', error: '#dc2626' }[status];
@@ -285,7 +343,9 @@ export default function DashboardPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ marginBottom: 0 }}>Dashboard</h1>
         <div style={{ fontSize: 14, color: '#666' }}>
-          {me.email} · <a href="/settings">Settings</a> ·{' '}
+          {me.email}
+          {billingActive && <span style={{ color: '#16a34a' }}> · Pro</span>} ·{' '}
+          <a href="/billing">Billing</a> · <a href="/settings">Settings</a> ·{' '}
           <button onClick={logout} style={{ ...btn, background: '#6b7280', border: 0 }}>Log out</button>
         </div>
       </div>
@@ -408,6 +468,23 @@ export default function DashboardPage() {
               : 'Crypto pairs only on this exchange.'}
           </p>
         )}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, color: '#374151' }}>Mode:</span>
+          <label style={{ fontSize: 14 }}>
+            <input type="radio" name="mode" checked={mode === 'paper'} onChange={() => setMode('paper')} /> Paper
+          </label>
+          <label style={{ fontSize: 14, color: liveReady ? '#111' : '#9ca3af' }}>
+            <input
+              type="radio"
+              name="mode"
+              checked={mode === 'live'}
+              disabled={!liveReady}
+              onChange={() => setMode('live')}
+            />{' '}
+            Live (real money)
+          </label>
+          {!liveReady && <span style={{ fontSize: 12, color: '#ca8a04' }}>{liveBlockReason}</span>}
+        </div>
         <div style={{ marginTop: 12 }}>
           <button style={{ ...btn, ...(symbolValid(exchange, symbol) ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }} onClick={startBot} disabled={!symbolValid(exchange, symbol)}>Start</button>
           <button style={{ ...btnDanger, marginLeft: 8 }} onClick={() => killBot(botId)}>Kill this</button>

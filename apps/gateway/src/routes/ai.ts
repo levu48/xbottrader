@@ -6,17 +6,20 @@ import {
   BacktestRequest,
   CopilotChatRequest,
 } from '../clients/ai.js';
-import type { RequireUser } from '../auth/middleware.js';
+import type { RequireSubscription, RequireUser } from '../auth/middleware.js';
 
 interface Deps {
   ai: AiEngineClient;
   requireUser: RequireUser;
+  requireSubscription: RequireSubscription;
 }
 
 export async function registerAiRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
-  const { requireUser } = deps;
+  const { requireUser, requireSubscription } = deps;
+  // LLM features are paid; backtest (deterministic replay, no LLM) stays free.
+  const paid = [requireUser, requireSubscription];
 
-  app.post('/v1/ai/copilot/chat', { preHandler: requireUser }, async (req, reply) => {
+  app.post('/v1/ai/copilot/chat', { preHandler: paid }, async (req, reply) => {
     const parsed = CopilotChatRequest.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'invalid_request', details: parsed.error.format() });
@@ -46,7 +49,7 @@ export async function registerAiRoutes(app: FastifyInstance, deps: Deps): Promis
     }
   });
 
-  app.post('/v1/ai/strategy/author', { preHandler: requireUser }, async (req, reply) => {
+  app.post('/v1/ai/strategy/author', { preHandler: paid }, async (req, reply) => {
     const parsed = AuthorStrategyRequest.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'invalid_request', details: parsed.error.format() });

@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { BotEngineClient, BotEngineError, StartBotRequest } from '../clients/bot.js';
 import type { RequireUser } from '../auth/middleware.js';
-import type { KeyStore, UserStore } from '../db/repos.js';
+import type { KeyStore, SubscriptionStore, UserStore } from '../db/repos.js';
 
 interface Deps {
   bot: BotEngineClient;
   requireUser: RequireUser;
   keys: KeyStore;
   users: UserStore;
+  subs: SubscriptionStore;
 }
 
 function upstreamError(reply: import('fastify').FastifyReply, e: unknown): never | void {
@@ -27,6 +28,15 @@ export async function registerBotsRoutes(app: FastifyInstance, deps: Deps): Prom
       return reply.status(400).send({ error: 'invalid_request', details: parsed.error.format() });
     }
     let body = parsed.data;
+
+    // Freemium gate: live trading and ai_signal (which calls the LLM even in
+    // paper mode) require an active subscription. Paper bots on the built-in
+    // deterministic strategies stay free.
+    if (body.mode === 'live' || body.strategy.strategy_type === 'ai_signal') {
+      if (!(await deps.subs.isActive(userId))) {
+        return reply.status(403).send({ error: 'subscription_required' });
+      }
+    }
 
     // Live trading: require 2FA + a stored key, and inject the encrypted envelope
     // for the chosen exchange. The Bot Engine is the only thing that decrypts it.

@@ -1,18 +1,26 @@
 import fastifyCookie from '@fastify/cookie';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify from 'fastify';
+import fastifyRawBody from 'fastify-raw-body';
 import { Redis } from 'ioredis';
+import Stripe from 'stripe';
 import { hostname } from 'node:os';
 
-import { makeRequireUser, resolveUserId } from './auth/middleware.js';
+import { makeRequireSubscription, makeRequireUser, resolveUserId } from './auth/middleware.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { RedisSessionStore } from './auth/sessions.js';
+import { registerBillingDisabledRoutes, registerBillingRoutes } from './billing/routes.js';
 import { AiEngineClient } from './clients/ai.js';
 import { BotEngineClient } from './clients/bot.js';
 import { InternalAuthSigner } from './clients/internal-auth.js';
 import { createDb } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
-import { DrizzleAuditLog, DrizzleKeyStore, DrizzleUserStore } from './db/repos.js';
+import {
+  DrizzleAuditLog,
+  DrizzleKeyStore,
+  DrizzleSubscriptionStore,
+  DrizzleUserStore,
+} from './db/repos.js';
 import { registerKeysRoutes } from './keys/routes.js';
 import { registerAiRoutes } from './routes/ai.js';
 import { registerBotsRoutes } from './routes/bots.js';
@@ -42,16 +50,22 @@ async function main(): Promise<void> {
   const app = Fastify({ logger: { level: 'info' } });
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket);
+  // Capture the raw body only where opted in (config.rawBody) — the Stripe
+  // webhook needs the exact bytes to verify its signature. All other routes
+  // keep Fastify's default JSON parser.
+  await app.register(fastifyRawBody, { global: false, runFirst: true });
 
   // --- persistence + auth ---
   const db = createDb(databaseUrl);
   const users = new DrizzleUserStore(db);
   const keys = new DrizzleKeyStore(db);
   const audit = new DrizzleAuditLog(db);
+  const subs = new DrizzleSubscriptionStore(db);
   const sessionRedis = new Redis(redisUrl);
   const sessions = new RedisSessionStore(sessionRedis);
   const cipher = EnvelopeCipher.fromEnv();
   const requireUser = makeRequireUser(sessions);
+  const requireSubscription = makeRequireSubscription(subs);
 
   // --- service clients ---
   const signer = InternalAuthSigner.fromEnv();
@@ -61,9 +75,30 @@ async function main(): Promise<void> {
   // --- routes ---
   await registerAuthRoutes(app, { users, sessions, audit });
   await registerKeysRoutes(app, { keys, cipher, requireUser });
-  await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users });
+  await registerBotsRoutes(app, { bot: botClient, requireUser, keys, users, subs });
   await registerMarketRoutes(app, { bot: botClient, requireUser });
-  await registerAiRoutes(app, { ai: aiClient, requireUser });
+  await registerAiRoutes(app, { ai: aiClient, requireUser, requireSubscription });
+
+  // Billing degrades gracefully: with Stripe unconfigured the gateway still
+  // boots and the app runs fully free (paid features stay locked because no one
+  // has an active subscription).
+  const stripeSecret = process.env.STRIPE_SECRET_KEY;
+  const stripePriceId = process.env.STRIPE_PRICE_ID;
+  const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (stripeSecret && stripePriceId && stripeWebhookSecret) {
+    await registerBillingRoutes(app, {
+      stripe: new Stripe(stripeSecret),
+      subs,
+      users,
+      requireUser,
+      priceId: stripePriceId,
+      webhookSecret: stripeWebhookSecret,
+      publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'https://xbottrader.ai',
+    });
+  } else {
+    app.log.warn('Stripe not configured (STRIPE_SECRET_KEY/PRICE_ID/WEBHOOK_SECRET) — billing disabled');
+    await registerBillingDisabledRoutes(app, { requireUser });
+  }
 
   app.get('/healthz', async () => ({ ok: true }));
 

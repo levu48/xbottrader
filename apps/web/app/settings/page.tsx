@@ -108,7 +108,8 @@ export default function Settings() {
           Encrypted before storage; only the Bot Engine ever decrypts. Needed for live trading.
           {form.exchange === 'alpaca' && (
             <> Alpaca uses an <strong>API key ID + secret</strong> (no passphrase) and issues separate
-            keys for paper vs live — use your paper keys here.</>
+            keys for paper vs live. For <strong>live</strong> bots, store your <strong>live</strong> keys
+            (paper keys won&apos;t authenticate against the live endpoint).</>
           )}
         </p>
         <form onSubmit={addKey}>
