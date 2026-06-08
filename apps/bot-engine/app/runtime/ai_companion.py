@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def _utc_date() -> date:
+    return datetime.now(UTC).date()
 
 
 class PublisherLike(Protocol):
@@ -52,6 +56,7 @@ class AiSignalCompanion:
         guidance: str | None,
         model: str | None,
         publisher: PublisherLike | None = None,
+        max_daily_consults: int | None = None,
     ) -> None:
         self._client = client
         self._user_id = user_id
@@ -61,13 +66,24 @@ class AiSignalCompanion:
         self._guidance = guidance
         self._model = model
         self._publisher = publisher
+        # Cost cap: at most this many model consults per UTC day (None = unlimited).
+        self._max_daily_consults = max_daily_consults
 
     async def run(self, state: StrategyState) -> None:
         seq = 0
+        # Per-UTC-day spend cap state. `flagged` makes the budget-exhausted event
+        # fire once per day, not every tick after the cap is hit.
+        day: date | None = None
+        consults = 0
+        flagged = False
         while True:
             # Decide AFTER the first interval so the window has bars to reason over;
             # the strategy fills WINDOW_SLOT as bars arrive.
             await asyncio.sleep(self._interval_s)
+
+            today = _utc_date()
+            if today != day:
+                day, consults, flagged = today, 0, False
 
             # Synchronous snapshot — consistent vs. the bar loop (no await between).
             raw = state.custom.get(WINDOW_SLOT, [])
@@ -77,6 +93,25 @@ class AiSignalCompanion:
                 position = Decimal(str(position))
             if len(closes) < 2:
                 continue  # not enough history yet — skip this tick, don't burn a call
+
+            if self._max_daily_consults is not None and consults >= self._max_daily_consults:
+                # Cap hit: stop consulting (no more cost) until the day rolls over.
+                # Flag it once so the user sees why decisions paused.
+                if not flagged:
+                    flagged = True
+                    logger.warning(
+                        "ai_signal bot %s hit daily consult cap (%d) — pausing consults until %s+1",
+                        self._bot_id, self._max_daily_consults, today,
+                    )
+                    await self._emit(
+                        "ai_budget_exhausted",
+                        {
+                            "date": today.isoformat(),
+                            "consults": consults,
+                            "max_daily_consults": self._max_daily_consults,
+                        },
+                    )
+                continue
 
             try:
                 decision = await self._client.signal(
@@ -92,6 +127,7 @@ class AiSignalCompanion:
                 logger.exception("ai_signal consult failed for bot %s", self._bot_id)
                 continue
 
+            consults += 1
             seq += 1
             state.custom[SIGNAL_SLOT] = {
                 "seq": seq,
@@ -99,15 +135,22 @@ class AiSignalCompanion:
                 "reason": decision.reason,
                 "ts_ms": _now_ms(),
             }
-            if self._publisher is not None:
-                await self._publisher.publish(
-                    Event(
-                        "ai_decision",
-                        self._user_id,
-                        self._bot_id,
-                        {"seq": seq, "action": decision.action, "reason": decision.reason},
-                    )
-                )
+            await self._emit(
+                "ai_decision",
+                {
+                    "seq": seq,
+                    "action": decision.action,
+                    "reason": decision.reason,
+                    "usage": decision.usage,
+                    "consults_today": consults,
+                },
+            )
+
+    async def _emit(self, event_type: str, payload: dict[str, object]) -> None:
+        if self._publisher is not None:
+            await self._publisher.publish(
+                Event(event_type, self._user_id, self._bot_id, payload)
+            )
 
 
 def build_ai_companion(
@@ -138,4 +181,5 @@ def build_ai_companion(
         guidance=getattr(params, "guidance", None),
         model=getattr(params, "model", None),
         publisher=publisher,
+        max_daily_consults=ai_client.max_daily_consults,
     )

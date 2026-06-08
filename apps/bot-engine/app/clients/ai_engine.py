@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 import httpx
@@ -32,6 +32,7 @@ _DEFAULT_TIMEOUT_S = 30.0
 class SignalDecision:
     action: str  # "buy" | "sell" | "hold"
     reason: str
+    usage: dict[str, int] = field(default_factory=dict)  # token counts, for spend tracking
 
 
 class AiEngineError(Exception):
@@ -46,6 +47,7 @@ class AiEngineClient:
         *,
         http: httpx.AsyncClient | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
+        max_daily_consults: int | None = None,
     ) -> None:
         if not base_url:
             raise ValueError("AI Engine base_url must be non-empty")
@@ -53,6 +55,10 @@ class AiEngineClient:
         self._auth = authenticator
         # Own a long-lived client by default; tests inject one over a MockTransport.
         self._http = http or httpx.AsyncClient(timeout=timeout_s)
+        # Deployment-wide cost cap: max model consults per bot per UTC day (None =
+        # unlimited). Carried here so it rides to each bot's companion alongside
+        # the client. Enforced per-bot by AiSignalCompanion.
+        self.max_daily_consults = max_daily_consults
 
     async def signal(
         self,
@@ -100,7 +106,13 @@ class AiEngineClient:
         action = data.get("action")
         if action not in ("buy", "sell", "hold"):
             raise AiEngineError(f"ai engine returned invalid action: {action!r}")
-        return SignalDecision(action=action, reason=str(data.get("reason", "")))
+        raw_usage = data.get("usage") or {}
+        usage = {
+            str(k): int(v)
+            for k, v in raw_usage.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        return SignalDecision(action=action, reason=str(data.get("reason", "")), usage=usage)
 
     async def aclose(self) -> None:
         await self._http.aclose()

@@ -7,7 +7,9 @@ Required env vars (any mode):
     REDIS_URL
     GATEWAY_INTERNAL_HMAC_SECRET
 Optional:
-    AI_ENGINE_URL   base URL of the AI Engine; required to run ai_signal bots
+    AI_ENGINE_URL              base URL of the AI Engine; required for ai_signal bots
+    XBT_AI_MAX_DAILY_CONSULTS  per-bot/day cap on ai_signal model consults
+                               (cost cap; default 200, 0 = unlimited)
 """
 
 from __future__ import annotations
@@ -86,7 +88,13 @@ def build_app() -> FastAPI:
     # The ai_signal companion calls the AI Engine, signing with the same shared
     # HMAC secret. Optional: absent → ai_signal bots are rejected at launch.
     ai_engine_url = os.environ.get("AI_ENGINE_URL")
-    ai_client = AiEngineClient(ai_engine_url, auth) if ai_engine_url else None
+    # Cost cap: max model consults per ai_signal bot per UTC day. 0 → unlimited.
+    max_daily_consults = int(os.environ.get("XBT_AI_MAX_DAILY_CONSULTS", "200")) or None
+    ai_client = (
+        AiEngineClient(ai_engine_url, auth, max_daily_consults=max_daily_consults)
+        if ai_engine_url
+        else None
+    )
 
     mode = os.environ.get("XBT_LAUNCHER", "prod")
     if mode == "demo":
