@@ -43,14 +43,22 @@ if [ ! -f /etc/xbt/bot-engine.env ]; then
 # Filled in by the operator on first deploy. See infra/README.md.
 GATEWAY_INTERNAL_HMAC_SECRET=CHANGE_ME
 XBT_KEK=CHANGE_ME
+
+# --- runtime mode (compose reads these via --env-file) ---
+# Defaults (when unset) are demo / paper / sqlite. To go to real venues:
+#   XBT_LAUNCHER=prod
+#   XBT_ALLOW_LIVE=1                                          # the real-money switch
+#   DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db
+# Then: systemctl restart xbt-bot-engine
 EOF
     chmod 600 /etc/xbt/bot-engine.env
 fi
 
 # ---- Stack ----
+# --env-file feeds XBT_LAUNCHER/XBT_ALLOW_LIVE/DATABASE_URL into compose interpolation.
 cd /opt/xbt/xbottrader
-docker compose -f infra/do/bot-engine-compose.yml pull || true
-docker compose -f infra/do/bot-engine-compose.yml up -d --build
+docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml pull || true
+docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml up -d --build
 
 # ---- systemd unit so the stack survives reboots ----
 cat > /etc/systemd/system/xbt-bot-engine.service <<'EOF'
@@ -63,8 +71,8 @@ After=docker.service network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/xbt/xbottrader
-ExecStart=/usr/bin/docker compose -f infra/do/bot-engine-compose.yml up -d
-ExecStop=/usr/bin/docker compose -f infra/do/bot-engine-compose.yml down
+ExecStart=/usr/bin/docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml up -d
+ExecStop=/usr/bin/docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml down
 
 [Install]
 WantedBy=multi-user.target

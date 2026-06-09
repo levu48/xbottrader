@@ -17,6 +17,8 @@ set -euo pipefail
 cd /opt/xbt/xbottrader
 git fetch origin "${BRANCH}"
 git reset --hard "origin/${BRANCH}"
-docker compose -f infra/do/bot-engine-compose.yml up -d --build
-docker compose -f infra/do/bot-engine-compose.yml ps
+# --env-file lets the compose file read XBT_LAUNCHER/XBT_ALLOW_LIVE/DATABASE_URL
+# from the operator's env file (with safe demo/0/sqlite defaults when unset).
+docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml up -d --build
+docker compose --env-file /etc/xbt/bot-engine.env -f infra/do/bot-engine-compose.yml ps
 EOF

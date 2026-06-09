@@ -20,16 +20,19 @@ services:
       # Provides REDIS_URL (shared Valkey), GATEWAY_INTERNAL_HMAC_SECRET, XBT_KEK.
       - /etc/xbt/bot-engine.env
     environment:
-      # Staging default: demo launcher (synthetic bars, paper only).
-      # For real venues set these in /etc/xbt/bot-engine.env instead:
+      # These resolve from /etc/xbt/bot-engine.env at compose time (the launch
+      # commands pass `--env-file /etc/xbt/bot-engine.env`), falling back to the
+      # safe staging defaults below when unset. So flipping to real venues is
+      # env-only — set these in /etc/xbt/bot-engine.env and redeploy:
       #   XBT_LAUNCHER=prod
+      #   XBT_ALLOW_LIVE=1                                          # the real-money switch
       #   DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db   # Alembic owns schema
-      #   XBT_KEK=<base64 32-byte master key>                       # decrypts user API keys
-      #   XBT_ALLOW_LIVE=0                                          # keep 0 until verification passes
-      XBT_LAUNCHER: demo
-      # Staging persistence: SQLite on a named volume. Swap for the managed
-      # Postgres URL (postgresql+asyncpg://…) once wired.
-      DATABASE_URL: sqlite+aiosqlite:////var/lib/xbt/bot-engine.db
+      #   XBT_KEK=<base64 32-byte master key>                       # must equal the Gateway's
+      XBT_LAUNCHER: ${XBT_LAUNCHER:-demo}                # demo = synthetic bars; prod = real venues
+      XBT_ALLOW_LIVE: ${XBT_ALLOW_LIVE:-0}               # 0 = paper fills even in prod; 1 = real orders
+      # Staging persistence: SQLite on a named volume. Set DATABASE_URL to the
+      # managed Postgres URL (postgresql+asyncpg://…) for prod.
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////var/lib/xbt/bot-engine.db}
       # In-cluster AI Engine. The companion signs calls with the shared
       # GATEWAY_INTERNAL_HMAC_SECRET (from the env_file), which ai-engine verifies.
       AI_ENGINE_URL: http://ai-engine:5002

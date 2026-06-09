@@ -212,6 +212,31 @@ That `git pull`s and rebuilds the compose stack.
 
 ---
 
+## 4b. Going live (real money)
+
+Runtime mode is **env-only** — the compose file reads `XBT_LAUNCHER`,
+`XBT_ALLOW_LIVE`, and `DATABASE_URL` from `/etc/xbt/bot-engine.env` (via
+`--env-file`), defaulting to `demo` / `0` / SQLite when unset. To arm real-money
+trading, edit that file and restart — no compose edits:
+
+```bash
+ssh root@<reserved ip> tee -a /etc/xbt/bot-engine.env >/dev/null <<'EOF'
+XBT_LAUNCHER=prod
+XBT_ALLOW_LIVE=1                                          # the real-money switch
+DATABASE_URL=postgresql+asyncpg://USER:PW@HOST:25060/db   # managed Postgres for prod
+EOF
+# XBT_KEK must already be set in this file and EQUAL the Gateway's.
+ssh root@<reserved ip> systemctl restart xbt-bot-engine
+```
+
+`XBT_ALLOW_LIVE=1` is the only switch that lets real orders be placed — keep it
+`0` (or unset) until the pre-real-money checks pass (kill-switch <5s, key-handling
+audit, backtest↔live parity). With `XBT_LAUNCHER=prod` and `XBT_ALLOW_LIVE=0` the
+bot trades **paper fills on real prices/venues** — a useful last rehearsal before
+flipping the switch. (Binance still geo-blocks US Droplet IPs — see Gotchas.)
+
+---
+
 ## Gotchas
 
 - **Binance geo-blocks datacenter / US IPs.** `api.binance.com` returns HTTP

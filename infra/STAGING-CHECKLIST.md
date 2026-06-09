@@ -3,8 +3,9 @@
 Goal of a **staging** deploy: validate the live topology (App Platform Gateway +
 Web + AI Engine, Droplet Bot Engine + Reserved IP + Redis + HMAC) and obtain the
 **Reserved IP** to publish for exchange API-key allowlisting. **Paper-only. Not
-for real users.** Auth is `x-dev-user` / HMAC; there is no real auth, billing, or
-Postgres yet. Live trading stays gated (`XBT_ALLOW_LIVE` unset).
+for real users.** Real auth (2FA) and Stripe billing now exist; staging still runs
+SQLite (no Postgres) and keeps live trading gated (`XBT_ALLOW_LIVE` unset →
+demo/paper). Billing degrades gracefully when Stripe is unconfigured.
 
 Full step-by-step commands live in [README.md](README.md); this is the gate list.
 
@@ -51,6 +52,21 @@ Full step-by-step commands live in [README.md](README.md); this is the gate list
 ## Smoke the loop
 - [ ] HMAC-signed paper-DCA start (README §3) → fills appear in `redis-cli XLEN xbt.events`.
 - [ ] Gateway `POST /v1/ai/backtest` (signed via `x-dev-user`) returns stats.
+
+## Smoke billing (`/v1/billing/*`)
+- [ ] **Stripe unset:** gateway still boots; `GET /v1/billing/status` →
+      `{enabled:false, active:false}`; `POST /v1/billing/checkout` → `503
+      billing_unavailable`. App runs fully free (live + AI stay locked).
+- [ ] **Stripe configured** (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_ID`
+      set on the gateway; webhook → `https://<domain>/v1/webhooks/stripe`; Customer
+      Portal activated):
+  - [ ] `stripe listen --forward-to <gateway>/v1/webhooks/stripe`; subscribe with test
+        card `4242 4242 4242 4242` → `subscriptions.status` becomes `active`.
+  - [ ] `GET /v1/billing/status` → `{active:true}`; a free user gets `403
+        subscription_required` on `/v1/ai/copilot/chat`, `/v1/ai/strategy/author`,
+        and on `mode:'live'` / `ai_signal` bot starts; `/v1/ai/backtest` stays free.
+  - [ ] Customer Portal **cancel** → webhook flips status → routes lock again.
+  - [ ] Webhook rejects an unsigned/garbage body with `400`.
 
 ## Known gaps (do NOT skip before *beta* / *real money*)
 - **Beta (real users, paper):** real auth + 2FA, Postgres + `alembic upgrade head`
