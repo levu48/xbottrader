@@ -35,7 +35,7 @@ export default function Login() {
 
   return (
     <main style={wrap}>
-      <img src="/images/xbottrader_logo.png" alt="xbottrader" style={{ display: 'block', width: 120, height: 'auto', margin: '0 auto 16px' }} />
+      <img src="/images/xbottrader_logo.png" alt="xbottrader" style={{ display: 'block', width: 240, height: 'auto', margin: '0 auto 16px' }} />
       <h1>Log in</h1>
       <form onSubmit={submit}>
         <input style={input} type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
