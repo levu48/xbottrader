@@ -85,12 +85,24 @@ export const AiSignalStrategy = z.object({
   model: z.string().optional(),
 });
 
+// Operator-authored Python strategy: code selected by key, not data. `params` is
+// a free-form object validated by the registered class in the Bot Engine (the
+// source of truth) and surfaced as a 400 on bad values. Operator-only — not
+// freemium-gated and intentionally without a typed per-strategy form.
+export const PythonStrategy = z.object({
+  strategy_type: z.literal('python'),
+  symbol: Symbol_,
+  strategy_key: z.string().min(1),
+  params: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const StrategyConfig = z.discriminatedUnion('strategy_type', [
   DcaStrategy,
   GridStrategy,
   MaCrossoverStrategy,
   CustomRulesStrategy,
   AiSignalStrategy,
+  PythonStrategy,
 ]);
 export type StrategyConfig = z.infer<typeof StrategyConfig>;
 

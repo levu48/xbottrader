@@ -68,4 +68,13 @@ def build_strategy(config: StrategyConfigLike | Any) -> Strategy:
                 model=getattr(config, "model", None),
             )
         )
+    if config.strategy_type == "python":
+        # Operator-authored Python strategy selected by key. The opaque params
+        # dict is validated by the registered class's from_params (its own typed
+        # boundary). Lazy import keeps the registry out of factory's import graph.
+        from .python_registry import build_python_strategy
+
+        params = config.params
+        params = params.model_dump() if hasattr(params, "model_dump") else dict(params)
+        return build_python_strategy(config.strategy_key, params)
     raise ValueError(f"unknown strategy_type: {config.strategy_type!r}")

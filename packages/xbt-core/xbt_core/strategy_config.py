@@ -17,7 +17,7 @@ Mirrored by the Zod ``StrategyConfig`` in ``packages/shared/src/bot.ts``.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -175,7 +175,24 @@ class AiSignalParams(BaseModel):
     model: str | None = None  # optional model override (defaults server-side)
 
 
+# --------------------------------------------------------------------------- #
+# Operator-authored Python strategy (code, not data).
+# Selected by ``strategy_key`` (a class registered in
+# xbt_core.strategies.python_registry); ``params`` is a free-form dict the
+# registered class validates itself. Unlike custom_rules, only the operator adds
+# these classes — so arbitrary Python is safe and, being pure, backtestable.
+# The union discriminates on strategy_type only, so the opaque params dict is
+# carried through unvalidated here (intended); ``symbol`` stays top-level because
+# StartBotRequest and the bar source both read ``strategy.symbol``.
+# --------------------------------------------------------------------------- #
+class PythonParams(BaseModel):
+    strategy_type: Literal["python"]
+    symbol: str = Field(min_length=1)
+    strategy_key: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 StrategyConfig = Annotated[
-    Union[DcaParams, GridParams, MaCrossoverParams, CustomRulesParams, AiSignalParams],
+    Union[DcaParams, GridParams, MaCrossoverParams, CustomRulesParams, AiSignalParams, PythonParams],
     Field(discriminator="strategy_type"),
 ]

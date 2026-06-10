@@ -27,6 +27,7 @@ from xbt_core.strategy_config import (  # noqa: F401
     GridParams,
     IndicatorSpec,
     MaCrossoverParams,
+    PythonParams,
     RuleSpec,
     StrategyConfig,
 )

@@ -24,7 +24,7 @@ interface Me {
 }
 
 type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
-type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules' | 'ai_signal';
+type StrategyType = 'dca' | 'grid' | 'ma_crossover' | 'custom_rules' | 'ai_signal' | 'python';
 type ExchangeId = 'binance' | 'coinbase' | 'alpaca';
 
 const EXCHANGES: { id: ExchangeId; label: string }[] = [
@@ -138,6 +138,11 @@ export default function DashboardPage() {
   const [aiLookback, setAiLookback] = useState('50');
   const [aiGuidance, setAiGuidance] = useState('');
   const [aiModel, setAiModel] = useState('');
+  // Python (operator-authored): a registered strategy_key + free-form params JSON.
+  const [pythonKey, setPythonKey] = useState('momentum');
+  const [pythonParams, setPythonParams] = useState(
+    '{\n  "symbol": "BTC/USDT",\n  "lookback": 20,\n  "threshold_pct": "5",\n  "quote_amount": "100"\n}',
+  );
   // AI strategy author (NL -> custom_rules): describe it, AI fills the RuleBuilder.
   const [authorDesc, setAuthorDesc] = useState('');
   const [authoring, setAuthoring] = useState(false);
@@ -235,11 +240,22 @@ export default function DashboardPage() {
         if (aiModel.trim()) cfg.model = aiModel.trim();
         return cfg;
       }
+      case 'python': {
+        // Operator-only: free-form params parsed here; a parse error throws and
+        // is surfaced by startBot. The Bot Engine validates the param values.
+        let params: Record<string, unknown>;
+        try {
+          params = JSON.parse(pythonParams || '{}') as Record<string, unknown>;
+        } catch (e) {
+          throw new Error(`params is not valid JSON: ${(e as Error).message}`);
+        }
+        return { strategy_type: 'python', symbol, strategy_key: pythonKey.trim(), params };
+      }
       case 'dca':
       default:
         return { strategy_type: 'dca', symbol, quote_amount: quote, interval_minutes: Number(interval) };
     }
-  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote, customCfg, aiQuote, aiIntervalMin, aiLookback, aiGuidance, aiModel]);
+  }, [strategyType, symbol, quote, interval, lowerPrice, upperPrice, gridLevels, totalQuote, fastPeriod, slowPeriod, positionQuote, customCfg, aiQuote, aiIntervalMin, aiLookback, aiGuidance, aiModel, pythonKey, pythonParams]);
 
   const startBot = useCallback(async () => {
     setNotice(null);
@@ -250,8 +266,15 @@ export default function DashboardPage() {
     if (mode === 'live' && !window.confirm(`Start a LIVE bot on ${exchange}? This places real-money orders.`)) {
       return;
     }
+    let strategy: Record<string, unknown>;
+    try {
+      strategy = buildStrategy();
+    } catch (e) {
+      setNotice((e as Error).message);
+      return;
+    }
     const r = await api(`/v1/bots/${encodeURIComponent(botId)}/start`, {
-      strategy: buildStrategy(),
+      strategy,
       mode,
       exchange,
     });
@@ -371,6 +394,7 @@ export default function DashboardPage() {
               <option value="ma_crossover">MA crossover</option>
               <option value="custom_rules">Custom rules</option>
               <option value="ai_signal">AI signal</option>
+              <option value="python">Python (operator)</option>
             </select>
           </Field>
           <Field label="symbol">
@@ -411,7 +435,21 @@ export default function DashboardPage() {
               <Field label="model (optional)"><input style={{ ...input, width: 150 }} value={aiModel} onChange={(e) => setAiModel(e.target.value)} placeholder="server default" /></Field>
             </>
           )}
+          {strategyType === 'python' && (
+            <Field label="strategy key"><input style={{ ...input, width: 150 }} value={pythonKey} onChange={(e) => setPythonKey(e.target.value)} placeholder="momentum" /></Field>
+          )}
         </div>
+        {strategyType === 'python' && (
+          <Field label="params (JSON) — validated by the registered strategy">
+            <textarea
+              style={{ ...input, width: '100%', maxWidth: 640, minHeight: 120, resize: 'vertical', marginRight: 0, fontFamily: 'monospace' }}
+              value={pythonParams}
+              onChange={(e) => setPythonParams(e.target.value)}
+              spellCheck={false}
+              placeholder='{ "symbol": "BTC/USDT", "lookback": 20, "threshold_pct": "5", "quote_amount": "100" }'
+            />
+          </Field>
+        )}
         {strategyType === 'ai_signal' && (
           <Field label="guidance (optional)">
             <textarea
