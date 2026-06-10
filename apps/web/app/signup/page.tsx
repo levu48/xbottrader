@@ -25,6 +25,7 @@ export default function Signup() {
 
   return (
     <main style={wrap}>
+      <img src="/images/xbottrader_logo.png" alt="xbottrader" style={{ display: 'block', width: 240, height: 'auto', margin: '0 auto 16px' }} />
       <h1>Sign up</h1>
       <form onSubmit={submit}>
         <input style={input} type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
