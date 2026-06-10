@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import NavBar from '../NavBar';
 
 interface BillingStatus {
   enabled: boolean;
@@ -57,10 +58,9 @@ export default function Billing() {
   if (!status) return <main style={{ padding: 32 }}>Loading…</main>;
 
   return (
-    <main style={{ padding: 32, maxWidth: 640, fontFamily: 'system-ui, sans-serif' }}>
-      <p style={{ color: '#666' }}>
-        <a href="/dashboard">← Dashboard</a> · <a href="/settings">Settings</a>
-      </p>
+    <main style={{ padding: 0, fontFamily: 'system-ui, sans-serif' }}>
+      <NavBar current="billing" />
+      <div style={{ padding: 32, maxWidth: 640 }}>
       <h1>Billing</h1>
       {notice && <p style={{ color: '#374151' }}>{notice}</p>}
 
@@ -104,6 +104,7 @@ export default function Billing() {
             </button>
           </>
         )}
+      </div>
       </div>
     </main>
   );

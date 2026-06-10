@@ -9,6 +9,7 @@ import {
   type ISeriesApi,
   type Time,
 } from 'lightweight-charts';
+import NavBar from '../NavBar';
 
 interface IncomingEvent {
   event_type: string;
@@ -102,11 +103,6 @@ function explainStartError(text: string): string {
   return text;
 }
 
-const navBar: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  padding: '10px 32px', borderBottom: '1px solid #e5e5e5', background: '#fff',
-  position: 'sticky', top: 0, zIndex: 10,
-};
 const card: React.CSSProperties = { border: '1px solid #e5e5e5', borderRadius: 8, padding: 16, marginBottom: 16 };
 const input: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ccc', borderRadius: 6, marginRight: 8, fontSize: 14 };
 const btn: React.CSSProperties = { padding: '6px 12px', border: '1px solid #2563eb', background: '#2563eb', color: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 14 };
@@ -310,11 +306,6 @@ export default function DashboardPage() {
     setNotice(r.ok ? `kill-all: ${r.text}` : `kill-all failed: ${r.text}`);
   }, [api]);
 
-  async function logout() {
-    await api('/v1/auth/logout');
-    window.location.assign('/login');
-  }
-
   const { fills, summary } = useMemo(() => {
     const fills = events.filter((e) => e.event_type === 'fill');
     let position = 0, cashOut = 0, fees = 0;
@@ -345,20 +336,7 @@ export default function DashboardPage() {
 
   return (
     <main style={{ padding: 0, fontFamily: 'system-ui, sans-serif' }}>
-      <nav style={navBar}>
-        <a href="/dashboard" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}>
-          <img src="/images/xbottrader_logo.png" alt="xbottrader" style={{ height: 32, width: 'auto', display: 'block' }} />
-        </a>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14, color: '#666' }}>
-          <span>
-            {me.email}
-            {billingActive && <span style={{ color: '#16a34a' }}> · Pro</span>}
-          </span>
-          <a href="/billing">Billing</a>
-          <a href="/settings">Settings</a>
-          <button onClick={logout} style={{ ...btn, background: '#6b7280', border: 0 }}>Log out</button>
-        </div>
-      </nav>
+      <NavBar />
       <div style={{ padding: 32, maxWidth: 1000 }}>
       <h1 style={{ marginTop: 0 }}>Dashboard</h1>
       <p style={{ marginTop: 4, color: '#666' }}>

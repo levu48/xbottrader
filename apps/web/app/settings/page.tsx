@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import NavBar from '../NavBar';
 
 interface Me {
   id: string;
@@ -79,10 +80,9 @@ export default function Settings() {
   if (!me) return <main style={{ padding: 32 }}>Loading…</main>;
 
   return (
-    <main style={{ padding: 32, maxWidth: 720, fontFamily: 'system-ui, sans-serif' }}>
-      <p style={{ color: '#666' }}>
-        <a href="/dashboard">← Dashboard</a> · {me.email}
-      </p>
+    <main style={{ padding: 0, fontFamily: 'system-ui, sans-serif' }}>
+      <NavBar current="settings" />
+      <div style={{ padding: 32, maxWidth: 720 }}>
       <h1>Settings</h1>
       {notice && <p style={{ color: '#374151' }}>{notice}</p>}
 
@@ -136,6 +136,7 @@ export default function Settings() {
             </li>
           ))}
         </ul>
+      </div>
       </div>
     </main>
   );
